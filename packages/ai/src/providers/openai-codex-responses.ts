@@ -14,6 +14,7 @@ import {
 	asRecord,
 	fetchWithRetry,
 	getInstallId,
+	getTestCodexUserAgent,
 	logger,
 	parseStreamingJson,
 	readSseJson,
@@ -4248,9 +4249,20 @@ function createCodexHeaders(
 	headers.delete(OPENAI_HEADERS.BETA);
 	headers.delete("openai-beta");
 	headers.set(OPENAI_HEADERS.BETA, betaHeader);
-	headers.set(OPENAI_HEADERS.ORIGINATOR, OPENAI_HEADER_VALUES.ORIGINATOR_CODEX);
+	// Honest OMP `pi` identity by default; an explicit caller-configured
+	// `originator` (e.g. a token gateway wired for official Codex clients in
+	// models.yml `headers`) is preserved so the operator can opt into the
+	// gateway's allowlisted client attribution. Defaulting stays truthful.
+	if (!headers.has(OPENAI_HEADERS.ORIGINATOR)) {
+		headers.set(OPENAI_HEADERS.ORIGINATOR, OPENAI_HEADER_VALUES.ORIGINATOR_CODEX);
+	}
 	headers.set(OPENAI_HEADERS.VERSION, codexClientVersion);
-	headers.set("User-Agent", USER_AGENT);
+	// Keep the honest OMP identity by default, while honoring an explicit
+	// caller-supplied User-Agent for authorized gateways that require their own
+	// client attribution. The Codex originator remains OMP's registered `pi`
+	// value; callers cannot silently turn this transport into an official Codex
+	// client by changing one header.
+	if (!headers.has("User-Agent")) headers.set("User-Agent", getTestCodexUserAgent() ?? USER_AGENT);
 	if (sessionId) {
 		headers.set(OPENAI_HEADERS.CONVERSATION_ID, sessionId);
 		headers.set(OPENAI_HEADERS.SESSION_ID, sessionId);
@@ -4325,7 +4337,12 @@ function redactHeaders(headers: Headers): Record<string, string> {
 export function resolveCodexResponsesUrl(baseUrl: string | undefined): string {
 	const raw = baseUrl && baseUrl.trim().length > 0 ? baseUrl : CODEX_BASE_URL;
 	const normalized = raw.replace(/\/+$/, "");
+	// A provider that already targets the plain `/responses` endpoint (e.g. a
+	// token gateway wired `wire_api = "responses"` like Codex does) keeps its
+	// exact path. Only the official ChatGPT backend and `/codex`-suffixed
+	// hosts get the `/codex/responses` mapping.
 	if (normalized.endsWith("/codex/responses")) return normalized;
+	if (normalized.endsWith("/responses")) return normalized;
 	if (normalized.endsWith("/codex")) return `${normalized}/responses`;
 	return `${normalized}/codex/responses`;
 }

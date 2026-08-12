@@ -114,6 +114,10 @@
 ### Added
 
 - Added `externalThinking` setting for private scratchpad reasoning via the new `think` tool
+### Added
+
+- Added `omp --mode app-server`, a JSONL adapter for the app-server initialize/thread/turn lifecycle that preserves OMP identity and approval boundaries.
+- Added the explicit `OMP_TEST_CODEX_USER_AGENT` override for authorized local security tests of Codex-client detection; it affects OpenAI Responses/Codex Responses requests and the app-server handshake.
 
 ## [17.2.13] - 2026-08-11
 

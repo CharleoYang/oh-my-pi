@@ -1,7 +1,7 @@
 import { scheduler } from "node:timers/promises";
 import { hostMatchesUrl } from "@oh-my-pi/pi-catalog/hosts";
 import { bareModelId, parseOpenAIModel, semverGte } from "@oh-my-pi/pi-catalog/identity";
-import { $flag, logger, structuredCloneJSON } from "@oh-my-pi/pi-utils";
+import { $flag, getTestCodexUserAgent, logger, structuredCloneJSON } from "@oh-my-pi/pi-utils";
 import * as AIError from "../error";
 import { getEnvApiKey } from "../stream";
 import type {
@@ -451,6 +451,10 @@ const streamOpenAIResponsesOnce = (
 				openAISessionId: routingSessionId,
 				promptCacheSessionId,
 			});
+			const testCodexUserAgent = getTestCodexUserAgent();
+			if (testCodexUserAgent && !Object.keys(headers).some(name => name.toLowerCase() === "user-agent")) {
+				headers["User-Agent"] = testCodexUserAgent;
+			}
 			const premiumRequestsTotal = copilotPremiumRequests;
 			const providerSessionState = getOpenAIResponsesProviderSessionState(model, options?.providerSessionState);
 			const strictToolsScope = getOpenAIStrictToolsScope(model, baseUrl);

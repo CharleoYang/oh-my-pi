@@ -59,6 +59,7 @@ import type { ExtensionUIContext } from "./extensibility/extensions/types";
 import { scheduleMarketplaceAutoUpdate } from "./extensibility/plugins/marketplace-auto-update";
 import { registerDaemonProjectPresence } from "./launch/presence";
 import type { MCPManager } from "./mcp";
+import { runAppServerMode } from "./modes/app-server/app-server-mode";
 import { InteractiveMode } from "./modes/interactive-mode";
 import type { PrintModeOptions } from "./modes/print-mode";
 import { claimRpcInput } from "./modes/rpc/rpc-input";
@@ -1240,13 +1241,16 @@ export async function runRootCommand(
 		process.exit(0);
 	}
 
-	if ((parsedArgs.mode === "rpc" || parsedArgs.mode === "rpc-ui") && parsedArgs.fileArgs.length > 0) {
-		process.stderr.write(`${chalk.red("Error: @file arguments are not supported in RPC mode")}\n`);
+	if (
+		(parsedArgs.mode === "rpc" || parsedArgs.mode === "rpc-ui" || parsedArgs.mode === "app-server") &&
+		parsedArgs.fileArgs.length > 0
+	) {
+		process.stderr.write(`${chalk.red("Error: @file arguments are not supported in protocol modes")}\n`);
 		process.exit(1);
 	}
 	const mode = parsedArgs.mode || "text";
 	// RPC owns stdin. Claim its singleton stream before plugin/extension discovery can load an in-process consumer.
-	const rpcInput = mode === "rpc" || mode === "rpc-ui" ? claimRpcInput() : undefined;
+	const rpcInput = mode === "rpc" || mode === "rpc-ui" || mode === "app-server" ? claimRpcInput() : undefined;
 
 	// Kick off plugin-root preload in parallel with the remaining startup work.
 	// Awaited later (before extension/skill discovery in createAgentSession needs it).
@@ -1278,7 +1282,7 @@ export async function runRootCommand(
 	// Classify the host before opening auth or settings storage so every
 	// session-critical database connection picks the right busy timeout.
 	// See getDbBusyTimeoutMs().
-	const isProtocolMode = mode === "rpc" || mode === "rpc-ui" || mode === "acp";
+	const isProtocolMode = mode === "rpc" || mode === "rpc-ui" || mode === "app-server" || mode === "acp";
 	// Protocol modes own stdin; treating it as prompt text would consume JSON-RPC frames before their transports start.
 	const pipedInput = isProtocolMode ? undefined : await logger.time("readPipedInput", readPipedInput);
 	const autoPrint = pipedInput !== undefined && !parsedArgs.print && parsedArgs.mode === undefined;
@@ -1758,7 +1762,10 @@ export async function runRootCommand(
 			process.exit(1);
 		}
 
-		if (mode === "rpc" || mode === "rpc-ui") {
+		if (mode === "app-server") {
+			stopStartupWatchdog();
+			await runAppServerMode(session, rpcInput);
+		} else if (mode === "rpc" || mode === "rpc-ui") {
 			// Branch-only protocol runner: keep RPC host code out of normal interactive startup.
 			const runRpcMode: RunRpcMode = (await import("./modes/rpc/rpc-mode")).runRpcMode;
 			stopStartupWatchdog();

@@ -31,6 +31,25 @@ export const VERSION: string = version;
 /** Default User-Agent header string (e.g. "omp/17.2.12") */
 export const USER_AGENT = `omp/${VERSION}`;
 
+/**
+ * Explicit local security-test override for Codex-compatible transports.
+ *
+ * The override is deliberately opt-in and affects only the Codex Responses
+ * transport plus app-server's initialize response. Normal OMP traffic keeps
+ * {@link USER_AGENT}.
+ */
+export function getTestCodexUserAgent(): string | undefined {
+	const candidate = process.env.OMP_TEST_CODEX_USER_AGENT?.trim();
+	if (!candidate) return undefined;
+	try {
+		const headers = new Headers();
+		headers.set("User-Agent", candidate);
+		return headers.get("User-Agent") ?? undefined;
+	} catch {
+		return undefined;
+	}
+}
+
 /** Minimum Bun version */
 export const MIN_BUN_VERSION: string = engines.bun.replace(/[^0-9.]/g, "");
 

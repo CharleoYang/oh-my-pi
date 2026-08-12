@@ -67,6 +67,9 @@
 ### Added
 
 - Added `forceReasoningOff` and `disableReasoning` options to disable reasoning in OpenAI and Azure OpenAI models
+### Changed
+
+- Codex Responses requests now preserve an explicitly supplied `User-Agent` header for authorized gateways while retaining `omp/<version>` as the default client identity.
 
 ## [17.2.13] - 2026-08-11
 

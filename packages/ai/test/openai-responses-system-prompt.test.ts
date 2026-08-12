@@ -60,11 +60,48 @@ async function captureRequestBody(
 	return captured;
 }
 
+async function captureRequestHeaders(model: Model<"openai-responses">): Promise<Headers> {
+	let captured: Headers | undefined;
+	const fetchMock: FetchImpl = async (_input: string | URL | Request, init?: RequestInit) => {
+		captured = init?.headers instanceof Headers ? init.headers : new Headers(init?.headers);
+		return createSseResponse();
+	};
+	const stream = streamOpenAIResponses(
+		model,
+		{ messages: [{ role: "user", content: "hi", timestamp: Date.now() }] },
+		{ apiKey: "test-key", fetch: fetchMock },
+	);
+	for await (const event of stream) {
+		if (event.type === "done" || event.type === "error") break;
+	}
+	if (!captured) throw new Error("Responses request did not capture headers");
+	return captured;
+}
+
 afterEach(() => {
 	vi.restoreAllMocks();
 });
 
 describe("openai-responses system prompt routing", () => {
+	it("uses the explicit security-test Codex User-Agent override for Responses-compatible providers", async () => {
+		const previous = process.env.OMP_TEST_CODEX_USER_AGENT;
+		const userAgent = "codex_cli_rs/0.147.0 (Mac OS 26.5.2; arm64) test-terminal/1.0";
+		process.env.OMP_TEST_CODEX_USER_AGENT = userAgent;
+		try {
+			const proxyModel: Model<"openai-responses"> = buildModel({
+				...gpt4oMiniModel,
+				api: "openai-responses",
+				provider: "tokens",
+				baseUrl: "https://token.example/v1",
+				compat: gpt4oMiniModel.compatConfig,
+			} as ModelSpec<"openai-responses">);
+			expect((await captureRequestHeaders(proxyModel)).get("User-Agent")).toBe(userAgent);
+		} finally {
+			if (previous === undefined) delete process.env.OMP_TEST_CODEX_USER_AGENT;
+			else process.env.OMP_TEST_CODEX_USER_AGENT = previous;
+		}
+	});
+
 	describe("non-reasoning model (canonical instructions field)", () => {
 		it("sends single system prompt as top-level instructions", async () => {
 			const context: Context = {

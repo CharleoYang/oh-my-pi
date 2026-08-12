@@ -354,6 +354,56 @@ describe("openai-codex streaming", () => {
 		]);
 	});
 
+	it("preserves an explicit User-Agent for an authorized Codex gateway", async () => {
+		const model = { ...createCodexTestModel("https://gateway.example/backend-api"), preferWebsockets: false };
+		let requestHeaders: Headers | undefined;
+		const fetchMock: FetchImpl = async (_input, init) => {
+			requestHeaders = init?.headers instanceof Headers ? init.headers : new Headers(init?.headers);
+			return new Response(createCompletedCodexSse("Hello"), {
+				status: 200,
+				headers: { "content-type": "text/event-stream" },
+			});
+		};
+
+		const result = await streamOpenAICodexResponses(model, createCodexTestContext(), {
+			apiKey: "gateway-key",
+			headers: { "User-Agent": "authorized-gateway/1.0" },
+			fetch: fetchMock,
+		}).result();
+
+		expect(result.stopReason).toBe("stop");
+		expect(requestHeaders?.get("User-Agent")).toBe("authorized-gateway/1.0");
+		expect(requestHeaders?.get("originator")).toBe("pi");
+	});
+
+	it("uses the explicit security-test Codex User-Agent override", async () => {
+		const previous = process.env.OMP_TEST_CODEX_USER_AGENT;
+		const userAgent = "codex_cli_rs/0.147.0 (Mac OS 26.5.2; arm64) test-terminal/1.0";
+		process.env.OMP_TEST_CODEX_USER_AGENT = userAgent;
+		try {
+			let requestHeaders: Headers | undefined;
+			const fetchMock: FetchImpl = async (_input, init) => {
+				requestHeaders = init?.headers instanceof Headers ? init.headers : new Headers(init?.headers);
+				return new Response(createCompletedCodexSse("Hello"), {
+					status: 200,
+					headers: { "content-type": "text/event-stream" },
+				});
+			};
+
+			const result = await streamOpenAICodexResponses(
+				{ ...createCodexTestModel("https://gateway.example/backend-api"), preferWebsockets: false },
+				createCodexTestContext(),
+				{ apiKey: "gateway-key", fetch: fetchMock },
+			).result();
+
+			expect(result.stopReason).toBe("stop");
+			expect(requestHeaders?.get("User-Agent")).toBe(userAgent);
+		} finally {
+			if (previous === undefined) delete process.env.OMP_TEST_CODEX_USER_AGENT;
+			else process.env.OMP_TEST_CODEX_USER_AGENT = previous;
+		}
+	});
+
 	it("omits chatgpt account headers for opaque custom provider API keys", async () => {
 		const tempDir = TempDir.createSync("@pi-codex-stream-");
 		setAgentDir(tempDir.path());
