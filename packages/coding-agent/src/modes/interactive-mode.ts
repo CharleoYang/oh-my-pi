@@ -37,6 +37,7 @@ import {
 	TUI,
 	visibleWidth,
 } from "@oh-my-pi/pi-tui";
+import { BrailleProgressBar, type TaskProgress } from "@oh-my-pi/pi-tui/components/braille-progress";
 import type { TerminalAppearanceRequestToken } from "@oh-my-pi/pi-tui/terminal";
 import { isInsideTerminalMultiplexer } from "@oh-my-pi/pi-tui/terminal-capabilities";
 import {
@@ -449,6 +450,8 @@ const MODEL_CYCLE_TRACK_CLEAR_MS = 4000;
 
 const SUBAGENT_HUD_VISIBLE_LIMIT = 8;
 const SUBAGENT_OBSERVER_UI_COALESCE_MS = 100;
+/** How long a just-settled subagent row stays at its terminal bar before leaving. */
+const SUBAGENT_COMPLETE_ROW_GRACE_MS = 3000;
 
 /**
  * Build the anchored subagent HUD block: a bold accent "Subagents" header plus
@@ -517,6 +520,16 @@ export class InteractiveMode implements InteractiveModeContext {
 	todoContainer: Container;
 	subagentContainer: Container;
 	btwContainer: Container;
+	brailleProgress: BrailleProgressBar | undefined;
+	/** Subagent ids that were rendering as running on the previous HUD flush. */
+	#lastRunningSubagentIds = new Set<string>();
+	/** Recently-settled subagents retained so the bar visibly reaches its end state. */
+	#completedSubagentRows = new Map<
+		string,
+		{ label: string; completedAtMs: number; toolCount: number; phase: "done" | "failed" | "aborted" }
+	>();
+	/** One-shot re-render so retained completed rows expire even with no further observer events. */
+	#subagentRowPruneTimer: ReturnType<typeof setTimeout> | undefined;
 	omfgContainer: Container;
 	errorBannerContainer: Container;
 	modelCycleContainer: Container;
@@ -2287,15 +2300,127 @@ export class InteractiveMode implements InteractiveModeContext {
 
 	/**
 	 * Anchored HUD of in-flight subagents, mirroring the Todos block above the
-	 * editor. Driven entirely by observer-registry change events, so rows appear
-	 * on spawn and the whole block clears itself once the last subagent leaves
-	 * the "active" state.
+	 * editor. Driven entirely by observer-registry change events. Running rows
+	 * render as braille bars with a rate-estimator fill and a spinning filled
+	 * portion, plus live activity lines (current tool + last output lines) so
+	 * the subagent reads as working. Settled subagents are retained briefly at
+	 * their terminal bar so the outcome is visible before the row leaves.
 	 */
 	#renderSubagentList(): void {
-		this.subagentContainer.clear();
-		const lines = renderSubagentHudLines(this.#observerRegistry.getSessions(), this.ui.terminal.columns);
-		if (lines.length === 0) return;
-		this.subagentContainer.addChild(new Text(lines.join("\n"), 1, 0));
+		const sessions = this.#observerRegistry.getSessions();
+		const running = sessions.filter(
+			s => s.kind === "subagent" && s.status === "active" && s.detached === true,
+		);
+		const now = Date.now();
+
+		// Detect subagents that just left the running set and retain them so the
+		// bar reaches its end state before the row disappears.
+		const currentIds = new Set(running.map(s => s.id));
+		for (const id of this.#lastRunningSubagentIds) {
+			if (currentIds.has(id)) continue;
+			const settled = sessions.find(s => s.id === id);
+			if (!settled) continue;
+			const label = settled.description?.trim() || settled.progress?.task?.trim() || settled.label || id;
+			const terminalPhase: "done" | "failed" | "aborted" =
+				settled.status === "failed" ? "failed" : settled.status === "aborted" ? "aborted" : "done";
+			this.#completedSubagentRows.set(id, {
+				label,
+				completedAtMs: now,
+				toolCount: settled.progress?.toolCount ?? 0,
+				phase: terminalPhase,
+			});
+		}
+		this.#lastRunningSubagentIds = currentIds;
+
+		// Prune completed rows past the grace window.
+		for (const [id, row] of this.#completedSubagentRows) {
+			if (now - row.completedAtMs > SUBAGENT_COMPLETE_ROW_GRACE_MS) {
+				this.#completedSubagentRows.delete(id);
+			}
+		}
+		// Re-render once more after the grace window so retained rows expire even
+		// when no further observer events arrive (e.g. the last subagent settled).
+		if (this.#completedSubagentRows.size > 0) {
+			if (!this.#subagentRowPruneTimer) {
+				this.#subagentRowPruneTimer = setTimeout(() => {
+					this.#subagentRowPruneTimer = undefined;
+					this.#renderSubagentList();
+					this.ui.requestRender();
+				}, SUBAGENT_COMPLETE_ROW_GRACE_MS);
+				this.#subagentRowPruneTimer.unref?.();
+			}
+		} else if (this.#subagentRowPruneTimer) {
+			clearTimeout(this.#subagentRowPruneTimer);
+			this.#subagentRowPruneTimer = undefined;
+		}
+
+		// Build the BrailleProgressBar color functions from the global theme.
+		const c = {
+			accent:   (s: string) => theme.fg("accent", s),
+			muted:    (s: string) => theme.fg("muted", s),
+			dim:      (s: string) => theme.fg("dim", s),
+			success:  (s: string) => theme.fg("success", s),
+			danger:   (s: string) => theme.fg("error", s),
+			warning:  (s: string) => theme.fg("warning", s),
+			text:     (s: string) => theme.fg("text", s),
+			bold:     (s: string) => theme.bold(s),
+			barFill:  (s: string) => theme.fg("accent", s),
+			barTrack: (s: string) => theme.fg("dim", s),
+		};
+
+		const tasks: TaskProgress[] = [];
+		for (const s of running) {
+			const p = s.progress;
+			const tools = p?.toolCount ?? 0;
+			const reqs = p?.requests ?? 0;
+			const meta = tools > 0 ? `${tools} tools` + (reqs > 0 ? ` · ${reqs} reqs` : "") : undefined;
+			// The component's internal rate estimator derives the displayed fill
+			// from `toolCount` — monotonic, never-regressing, learned from prior
+			// completed members. The HUD only reports raw facts.
+			tasks.push({
+				id: s.id,
+				label: s.description?.trim() || p?.task?.trim() || s.label || s.id,
+				progress: 1,
+				phase: "running",
+				meta,
+				toolCount: tools,
+				activity: p
+					? {
+							intent: p.lastIntent,
+							currentTool: p.currentTool,
+							currentToolArgs: p.currentToolArgs,
+							output: p.recentOutput,
+						}
+					: undefined,
+			});
+		}
+		for (const [id, row] of this.#completedSubagentRows) {
+			if (currentIds.has(id)) continue;
+			tasks.push({
+				id,
+				label: row.label,
+				progress: row.phase === "done" ? 1 : 0,
+				phase: row.phase,
+				completedAtMs: row.completedAtMs,
+				toolCount: row.toolCount,
+			});
+		}
+
+		if (tasks.length === 0) {
+			if (this.brailleProgress) {
+				this.subagentContainer.disposeChildren();
+				this.brailleProgress = undefined;
+			}
+			return;
+		}
+
+		if (!this.brailleProgress) {
+			this.subagentContainer.clear();
+			this.brailleProgress = new BrailleProgressBar(this.ui, "Subagents", c, tasks);
+			this.subagentContainer.addChild(this.brailleProgress);
+		} else {
+			this.brailleProgress.setTasks(tasks);
+		}
 	}
 
 	async #loadTodoList(): Promise<void> {
@@ -4152,6 +4277,10 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#liveCommandController.dispose();
 		this.#cancelTodoAutoClearTimer();
 		this.#cancelObserverUiSyncTimer();
+		if (this.#subagentRowPruneTimer) {
+			clearTimeout(this.#subagentRowPruneTimer);
+			this.#subagentRowPruneTimer = undefined;
+		}
 		this.#cancelGoalContinuation();
 		if (this.#sttController) {
 			this.#sttController.dispose();

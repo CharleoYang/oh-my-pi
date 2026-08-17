@@ -153,7 +153,7 @@ describe("AgentSession magic keyword settings", () => {
 		const promptMessages = promptSpy.mock.calls[0]![0] as unknown as Array<{ content?: string; customType?: string }>;
 		const notice = promptMessages.find(message => message.customType === "workflow-notice")?.content ?? "";
 		expect(notice.toLowerCase()).not.toContain("scout");
-		expect(notice).toContain("Explore inline FIRST");
+		expect(notice).toContain("Dispatch exploration to a subagent FIRST");
 	});
 
 	it("skips workflowz notice when the task tool is inactive", async () => {

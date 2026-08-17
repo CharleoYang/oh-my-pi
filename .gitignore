@@ -94,3 +94,5 @@ packages/coding-agent/bench/boot-baseline.json
 /.loopx/
 /.codex/goals/
 /.omp/loop.md
+
+/.local/
