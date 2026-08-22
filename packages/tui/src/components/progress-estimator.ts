@@ -14,14 +14,7 @@
  * ticks glide toward the target exponentially (`catchUpDisplayTicks`) so the bar
  * advances smoothly between tool events — never jumping, never regressing.
  */
-export type ProgressPhase =
-	| "pending"
-	| "queued"
-	| "suspended"
-	| "running"
-	| "completed"
-	| "failed"
-	| "cancelled";
+export type ProgressPhase = "pending" | "queued" | "suspended" | "running" | "completed" | "failed" | "cancelled";
 
 export interface ProgressEstimatorOptions {
 	/** Decay window for the local tool-call rate, in ms. */
@@ -144,11 +137,10 @@ export class ProgressEstimator {
 		delete state.lastTargetTicks;
 	}
 
-	recordToolCall(input: {
-		readonly memberKey: string;
-		readonly toolCallId: string;
-		readonly nowMs: number;
-	}): { readonly accepted: boolean; readonly rawTicks: number } {
+	recordToolCall(input: { readonly memberKey: string; readonly toolCallId: string; readonly nowMs: number }): {
+		readonly accepted: boolean;
+		readonly rawTicks: number;
+	} {
 		const state = this.#getOrCreateMember(input.memberKey);
 		this.#startWork(state, input.nowMs);
 		if (state.seenToolCallIds.has(input.toolCallId)) {
@@ -216,7 +208,13 @@ export class ProgressEstimator {
 		const boostGain = this.#maxBoostGain * boostConfidence;
 		const targetProgress = rawProgress + boostGain * (estimatedProgress - rawProgress);
 		const targetTicks = Math.max(rawTicks, targetProgress * capacityTicks);
-		const displayTicks = this.#catchUpDisplayTicks(state, previousDisplayTicks, targetTicks, capacityTicks, input.nowMs);
+		const displayTicks = this.#catchUpDisplayTicks(
+			state,
+			previousDisplayTicks,
+			targetTicks,
+			capacityTicks,
+			input.nowMs,
+		);
 
 		state.displayTicks = displayTicks;
 		state.lastEstimateAtMs = input.nowMs;
@@ -243,11 +241,7 @@ export class ProgressEstimator {
 		return false;
 	}
 
-	#markTerminal(
-		memberKey: string,
-		nowMs: number,
-		terminalKind: "completed" | "failed" | "cancelled",
-	): void {
+	#markTerminal(memberKey: string, nowMs: number, terminalKind: "completed" | "failed" | "cancelled"): void {
 		const state = this.#getOrCreateMember(memberKey);
 		this.#finishPausedInterval(state, nowMs);
 		state.terminalAtMs = nowMs;

@@ -1,6 +1,6 @@
 import type { Component, TUI } from "../tui";
-import { getPaddingX, truncateToWidth, visibleWidth } from "../utils";
-import { ProgressEstimator, type ProgressEstimate, type ProgressPhase } from "./progress-estimator";
+import { getPaddingX, truncateToWidth } from "../utils";
+import { type ProgressEstimate, ProgressEstimator, type ProgressPhase } from "./progress-estimator";
 
 // ─── Braille dot constants ───────────────────────────────────────────────────
 const BRAILLE_LEVELS = ["⣀", "⣄", "⣤", "⣦", "⣶", "⣷", "⣿"] as const;
@@ -65,24 +65,37 @@ export interface BrailleColorSet {
 	barTrack: ColorFn;
 }
 
-function phaseColor(phase: TaskProgress["phase"]): { glyph: string; color: "accent" | "dim" | "success" | "danger" | "warning" } {
+function phaseColor(phase: TaskProgress["phase"]): {
+	glyph: string;
+	color: "accent" | "dim" | "success" | "danger" | "warning";
+} {
 	switch (phase) {
-		case "pending": return { glyph: "○", color: "dim" };
-		case "running": return { glyph: "◐", color: "accent" };
-		case "done":    return { glyph: "✓", color: "success" };
-		case "failed":  return { glyph: "✗", color: "danger" };
-		case "aborted": return { glyph: "▲", color: "warning" };
+		case "pending":
+			return { glyph: "○", color: "dim" };
+		case "running":
+			return { glyph: "◐", color: "accent" };
+		case "done":
+			return { glyph: "✓", color: "success" };
+		case "failed":
+			return { glyph: "✗", color: "danger" };
+		case "aborted":
+			return { glyph: "▲", color: "warning" };
 	}
 }
 
 /** TaskProgress phase → estimator phase. */
 function estimatorPhase(phase: TaskProgress["phase"]): ProgressPhase {
 	switch (phase) {
-		case "running": return "running";
-		case "done":    return "completed";
-		case "failed":  return "failed";
-		case "aborted": return "cancelled";
-		default:        return "pending";
+		case "running":
+			return "running";
+		case "done":
+			return "completed";
+		case "failed":
+			return "failed";
+		case "aborted":
+			return "cancelled";
+		default:
+			return "pending";
 	}
 }
 
@@ -128,7 +141,7 @@ function accumulatedBrailleBar(
 		const count = countThisCycle > 0 ? countThisCycle : completedCycles > 0 ? dotsPerCell : 0;
 		cells.push(count === 0 ? emptyColorForCell(i)(BRAILLE_EMPTY) : filledColor(levelGlyph(count)));
 	}
-	return "[" + cells.join("") + "]";
+	return `[${cells.join("")}]`;
 }
 
 /** Settled fill animation: glide ticks → full bar over {@link COMPLETE_FILL_MS}. */
@@ -153,12 +166,7 @@ function failedBrailleBar(
 	dim: ColorFn,
 ): string {
 	const redCellCount = Math.ceil(completedDisplayTicks(ticks, width, phaseElapsedMs) / BRAILLE_LEVELS_LEN);
-	return accumulatedBrailleBar(
-		ticks,
-		width,
-		danger,
-		cellIndex => (cellIndex < redCellCount ? warning : dim),
-	);
+	return accumulatedBrailleBar(ticks, width, danger, cellIndex => (cellIndex < redCellCount ? warning : dim));
 }
 
 /**
@@ -195,7 +203,7 @@ function spinningFillBar(
 			cells.push(filledColor(SPIN_FRAMES[frame]!)); // spinning filled cell
 		}
 	}
-	return "[" + cells.join("") + "]";
+	return `[${cells.join("")}]`;
 }
 
 /** Dispatch bar rendering by phase. `estimate` carries the display ticks. */
@@ -218,7 +226,6 @@ function renderBrailleBar(
 			return failedBrailleBar(ticks, width, phaseElapsedMs, c.danger, c.warning, c.barTrack);
 		case "aborted":
 			return accumulatedBrailleBar(ticks, width, c.warning, () => c.barTrack);
-		case "running":
 		default:
 			return spinningFillBar(ticks, width, nowMs, c.barFill, c.barTrack);
 	}
@@ -273,12 +280,7 @@ export class BrailleProgressBar implements Component {
 	#lastPhase = new Map<string, TaskProgress["phase"]>();
 	#lastToolCount = new Map<string, number>();
 
-	constructor(
-		ui: TUI | undefined,
-		label: string,
-		color: BrailleColorSet,
-		tasks?: TaskProgress[],
-	) {
+	constructor(ui: TUI | undefined, label: string, color: BrailleColorSet, tasks?: TaskProgress[]) {
 		this.#ui = ui;
 		this.#label = label;
 		this.#color = color;
@@ -424,8 +426,7 @@ export class BrailleProgressBar implements Component {
 				capacityTicks,
 				nowMs: now,
 			});
-			const phaseElapsedMs =
-				task.completedAtMs !== undefined ? Math.max(0, now - task.completedAtMs) : 0;
+			const phaseElapsedMs = task.completedAtMs !== undefined ? Math.max(0, now - task.completedAtMs) : 0;
 			const bar = renderBrailleBar(estimate, task.phase, bCells, now, c, phaseElapsedMs);
 			const meta = task.meta ? ` ${c.dim(task.meta)}` : "";
 			const line = `${pad}  ${c[color](glyph)} ${bar} ${c.text(task.label)}${meta}`;
@@ -442,11 +443,15 @@ export class BrailleProgressBar implements Component {
 						? `${a.currentTool}${a.currentToolArgs ? ` ${replaceWhitespace(a.currentToolArgs)}` : ""}`
 						: a.intent;
 				if (current) {
-					lines.push(`${indent}  ${c.barTrack("·")} ${c.muted(truncateToWidth(replaceWhitespace(current), activityBudget))}`);
+					lines.push(
+						`${indent}  ${c.barTrack("·")} ${c.muted(truncateToWidth(replaceWhitespace(current), activityBudget))}`,
+					);
 				}
 				for (const out of (a.output ?? []).slice(0, 3)) {
 					if (!out) continue;
-					lines.push(`${indent}  ${c.barTrack("·")} ${c.barTrack(truncateToWidth(replaceWhitespace(out), activityBudget))}`);
+					lines.push(
+						`${indent}  ${c.barTrack("·")} ${c.barTrack(truncateToWidth(replaceWhitespace(out), activityBudget))}`,
+					);
 				}
 			}
 		}
