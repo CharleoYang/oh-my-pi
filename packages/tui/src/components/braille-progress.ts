@@ -385,12 +385,7 @@ export class BrailleProgressBar implements Component {
 	#requestPaint(): void {
 		const ui = this.#ui;
 		if (!ui) return;
-		// Loader-style direct write when safe; fall back to a component render.
-		if (typeof ui.requestDirectWrite === "function") {
-			ui.requestDirectWrite(this);
-		} else {
-			ui.requestComponentRender(this);
-		}
+		ui.requestComponentRender(this);
 	}
 
 	render(width: number): readonly string[] {
