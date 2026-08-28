@@ -2,36 +2,158 @@
 
 ## [Unreleased]
 
-### Breaking Changes
-
-- Changed native macOS spelling and completion functions to return Promises
-- Changed `EditorTextAssistProvider.tryAutocorrect` signature to receive editor state instead of raw text
-- Changed `Editor.decorateText` signature to provide line and column context instead of raw text string
+## [18.0.10] - 2026-08-28
 
 ### Added
 
-- Added spelling suggestion support; implement `getWordReplacements` to provide word choices
-- Added `Terminal.pendingOutputBytes` and an output-backpressure render gate: frames are not composed while the terminal still owes more than a frame budget of bytes, so a slow terminal receives only the latest frame instead of a queue of stale ones
-- Added `ctrl+.` keybinding to trigger spelling suggestions
-- Added `EditorTextAssistProvider` to support independent word completion and autocorrection
-- `EditorTextAssistProvider.tryAutocorrect` and `getWordReplacements` may return Promises; the editor applies async results only when the document is unchanged and reports applies through `Editor.onTextAssistApplied`
-- Added `deferInput` start option (`Terminal`/`TUI`/`TUIStartOptions`) and `enableInput()`: paint without owning stdin so the host tty's cooked-mode echo covers event-loop stalls, then adopt the kernel-buffered keystrokes
-- Added icon support to autocomplete and select lists, with customizable theming
-- `MarkdownTheme.createHighlightStream` lets themes supply a stateful incremental highlighter; streaming Markdown now syntax-highlights the completed lines of any open code fence (previously only diff/patch fences), and a fence highlights whole-block as soon as it closes
-- `SelectList` layouts accept `maxDescriptionRows` to cap wrapped descriptions with a trailing ellipsis
-- `CombinedAutocompleteProvider` accepts a `commandUsage` callback that ranks equal-score slash matches by usage frequency
-- `Editor.viewportRowsProvider` lets hosts clamp the autocomplete dropdown to the live terminal height
+- Press the Right Arrow at the end of a line to accept autocomplete suggestions, inline ghost-text completions, and spelling corrections, just like Tab.
+- Added a smooth brand-color transition and an elapsed turn timer to the status line while the agent is working.
+- Added a full-width “band” composer style for flush status lines.
+
+## [18.0.9] - 2026-08-28
+
+### Added
+
+- Exported TuiDebugServer for programmatic headless control
+- Added debug demonstration script to examples
+- Added an `OMP_TUI_DEBUG` Unix socket for headless TUI driving and structured inspection.
 
 ### Changed
 
-- Word completion now skips adding a trailing space if the following character is punctuation
-- Increased default autocomplete dropdown height from 5 to 10 items
-- Changed the test `VirtualTerminal` engine from ghostty-web to `kitty-vt-wasm` (kitty's real screen.c/vt-parser.c). Retires the ghostty-web 0.4 crash workarounds (combining-mark input stripping, event-log replay/compaction, allocator-exhaustion engine rotation, full-clear ED3 recreate), gives the render-stress oracles exact default-color detection from typed cell snapshots, and lets full-clear/ED3 repaints exercise the engine natively instead of being masked by an engine recreate.
-- Added `Editor.setTheme()` so an adopted editor can switch from its lightweight startup theme to the configured interactive theme without replacing the editor or losing its draft.
+- Inline hex colors now render with VS Code-style colored backgrounds and automatically selected black or white text for readability, alongside the color swatch.
+- LaTeX text formatting commands such as \textbf, \textit, \textsl, and \emph now render as terminal bold or italic text.
 
 ### Fixed
 
-- Fixed the whole TUI freezing for as long as a slow, busy, or occluded terminal took to drain a repaint: `process.stdout.write` on a POSIX TTY blocks the event loop, so multi-MB full repaints (Esc-Esc `/tree` navigation, resume, theme change) could stall input, timers, and the agent for minutes. Stdout writes now flow through the off-thread `TtyWriter` pump from pi-natives and never block the render loop
+- Fixed inline color swatches rendering incorrectly inside highlighted lines.
+- Fixed terminal resizing in tmux panes and Windows consoles duplicating the current in-progress turn in scrollback.
+
+## [18.0.8] - 2026-08-27
+
+### Added
+
+- `ProcessTerminal` accepts a `conpty` option to force ConPTY-hosted behavior on or off, keeping terminal tests hermetic on WSL where live env detection would otherwise flip kitty-keyboard flags and write chunking ([#9887](https://github.com/can1357/oh-my-pi/issues/9887)).
+
+### Fixed
+
+- Fixed pending-work animations repeatedly composing expensive frames without applying their full render cost to CPU backpressure.
+- Fixed unfinished live viewport rows entering tmux pane history and duplicating streamed output ([#9780](https://github.com/can1357/oh-my-pi/issues/9780)).
+
+## [18.0.7] - 2026-08-26
+
+### Breaking Changes
+
+- Removed the `inlineMathSpanEnd` and `mathStartIndex` exports; the math delimiter grammar now lives in `@oh-my-pi/pi-utils/math-delimiters`.
+
+### Fixed
+
+- Math spans now end at the first unescaped delimiter, so a TeX row break no longer closes a span early: `\(a \\) b\)` renders as one equation, and an escaped `\$` no longer ends `$$…$$`.
+- Fixed image previews displaying as garbled characters in Paseo terminals.
+- Fixed terminal resizing from duplicating committed history in native scrollback.
+- Fixed autocomplete suggestions for bare-name skills such as `/batch` when no command matches the prefix more strongly.
+
+## [18.0.6] - 2026-08-26
+
+### Added
+
+- Added `Markdown.getLastRenderStableText()` to expose the stable prefix of streamed Markdown text for append-only transcript publication.
+
+## [18.0.5] - 2026-08-25
+
+### Breaking Changes
+
+- Renamed the public `TerminalFrameProvider.resetHistory` method to `beginHistoryReplay`.
+
+### Added
+
+- Loader messages can now be provided as a function, allowing dynamic labels such as live countdowns to update on each spinner tick while preserving the existing behavior for static strings.
+
+### Changed
+
+- Improved history replay and terminal output handling so replayed content is rendered efficiently and complete replay results are written together.
+
+### Fixed
+
+- Fixed graceful shutdown so finalized output is correctly retired before handing control back to the shell.
+- Fixed terminal scrollback corruption during shutdown, tmux pane zoom and resize, and destructive screen resets, preventing duplicated frames, lost history, and stale transcript re-streaming.
+- Fixed streaming Markdown rendering at chunk boundaries to preserve CommonMark emphasis behavior for Unicode text and correctly recognize GFM tables as they are completed.
+
+## [18.0.4] - 2026-08-24
+
+### Changed
+
+- Significantly improved streaming Markdown rendering performance by caching unchanged rows, resuming boundary walks, and inspecting only text deltas for guard scans and OSC 8 normalization.
+
+### Fixed
+
+- Fixed TUI aborting when syntax highlighting fails during Markdown rendering by falling back to unhighlighted text.
+- Fixed Korean IME cursor drift in Orca by properly matching two-cell Hangul Compatibility Jamo rendering.
+
+## [18.0.3] - 2026-08-23
+
+### Fixed
+
+- Fixed inline images vanishing from the transcript and scrollback when the session exits: stop no longer deletes transmitted Kitty images from the terminal's graphics store.
+
+## [18.0.2] - 2026-08-23
+
+### Fixed
+
+- Fixed visible history being erased when enlarging the terminal.
+
+## [18.0.1] - 2026-08-23
+
+### Added
+
+- Collapsed individual skill commands into a `/skill:` namespace entry to declutter suggestions
+- Added `TUI.renderNow()` for terminal-safe synchronous priority frames that retain resize debounce, output-backlog, and image deferral safeguards.
+
+### Changed
+
+- Improved slash command autocompletion to chain suggestions after selecting a namespace
+- Replaced the native-scrollback inference API (`NativeScrollback*` interfaces and the scrollback rebuild/resize settings hooks) with explicit `TerminalFramePlan` history batches.
+- Post-resize repaints now recover the reflowed viewport anchor with a cursor-position report (DSR) instead of trusting stale grid coordinates, so a settled resize no longer duplicates the editor/status rows on screen.
+- History appends that overflow the screen erase the old live viewport first, so a scroll can only push committed rows and blanks into scrollback, never an unfinished frame.
+
+### Fixed
+
+- Fixed consecutive prompt submissions being skipped by persistent history, allowing the latest project metadata to replace the previous entry without duplicating editor navigation history.
+- Fixed the history drain stalling on idle screens: accepting a batch now pumps the next frame, so a large resumed transcript retires to terminal history instead of pinning the live viewport in its emergency aggregate.
+- Fixed fuzzy matching so a qualifying whole-word hit is not hidden by an earlier mid-word occurrence ([#8465](https://github.com/can1357/oh-my-pi/pull/8465) by [@Mustaqeem66](https://github.com/Mustaqeem66)).
+- Fixed stray characters appearing in the terminal viewport during title updates
+- Fixed editor input lag when autocomplete providers are slow by keeping only the latest pending lookup.
+- Fixed pasting an image in kitty occasionally spraying base64 text into the composer alongside the image attachment: a kitty OSC 5522 clipboard packet torn by the incomplete-escape flush is now discarded up to its terminator instead of being replayed as keystrokes.
+- Fixed Kitty OSC 66 headings activating before the host explicitly enables text sizing.
+- Markdown streaming renderer now scans only the mutable tail (not the full document) for reference-link definitions and CR on every frame, eliminating the O(n²) `RegExp.test` cost that accounted for ~26% CPU during active streaming ([#9048](https://github.com/can1357/oh-my-pi/issues/9048)).
+
+## [18.0.0] - 2026-08-22
+
+### Breaking Changes
+
+- Changed native macOS spelling and completion functions to return Promises.
+- Updated `EditorTextAssistProvider.tryAutocorrect` signature to receive editor state instead of raw text.
+- Updated `Editor.decorateText` signature to provide line and column context instead of raw text.
+
+### Added
+
+- Added `EditorTextAssistProvider` with spelling suggestion support (`ctrl+.`), word replacement choices, and async autocorrection handling.
+- Added `Terminal.pendingOutputBytes` and an output-backpressure render gate to drop stale frames on slow terminals.
+- Added `deferInput` startup option and `enableInput()` across `Terminal`, `TUI`, and `TUIStartOptions` to improve startup responsiveness.
+- Added icon support and customizable theming to autocomplete and select lists.
+- Added `MarkdownTheme.createHighlightStream` for incremental syntax highlighting of completed lines in streaming Markdown code blocks.
+- Added `maxDescriptionRows` option to `SelectList` layouts to truncate wrapped descriptions with an ellipsis.
+- Added `commandUsage` ranking callback support to `CombinedAutocompleteProvider` to prioritize frequently used slash commands.
+- Added `Editor.viewportRowsProvider` to constrain autocomplete dropdowns within the available terminal height.
+- Added `Editor.setTheme()` to dynamically change themes without recreating the editor or losing draft content.
+
+### Changed
+
+- Adjusted word completion to skip appending a trailing space when the following character is punctuation.
+- Increased default autocomplete dropdown height from 5 to 10 items.
+
+### Fixed
+
+- Fixed TUI freezing during large repaints on slow or occluded terminals by moving stdout writes to an off-thread writer.
 
 ## [17.4.4] - 2026-08-22
 
