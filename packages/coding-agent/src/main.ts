@@ -1432,9 +1432,8 @@ export async function runRootCommand(
 			process.exit(1);
 		}
 		const mode = parsedArgs.mode || "text";
-		// RPC owns stdin. Claim its singleton stream before plugin/extension discovery can load an in-process consumer.
-		const rpcInput = mode === "rpc" || mode === "rpc-ui" ? claimRpcInput() : undefined;
-
+		// RPC and app-server own stdin. Claim their singleton stream before plugin/extension discovery can load an in-process consumer.
+		const rpcInput = mode === "rpc" || mode === "rpc-ui" || mode === "app-server" ? claimRpcInput() : undefined;
 		// Kick off plugin-root preload in parallel with the remaining startup work.
 		// Awaited later (before extension/skill discovery in createAgentSession needs it).
 		const home = os.homedir();
@@ -1465,8 +1464,7 @@ export async function runRootCommand(
 		// Classify the host before opening auth or settings storage so every
 		// session-critical database connection picks the right busy timeout.
 		// See getDbBusyTimeoutMs().
-		const isProtocolMode = mode === "rpc" || mode === "rpc-ui" || mode === "acp";
-		// Protocol modes own stdin; treating it as prompt text would consume JSON-RPC frames before their transports start.
+		const isProtocolMode = mode === "rpc" || mode === "rpc-ui" || mode === "app-server" || mode === "acp";
 		const pipedInput = isProtocolMode ? undefined : await logger.time("readPipedInput", readPipedInput);
 		const autoPrint = pipedInput !== undefined && !parsedArgs.print && parsedArgs.mode === undefined;
 		const isInteractive = !parsedArgs.print && !autoPrint && parsedArgs.mode === undefined;
