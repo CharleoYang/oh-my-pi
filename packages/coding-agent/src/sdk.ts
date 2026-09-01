@@ -161,7 +161,7 @@ import {
 	USER_INTERRUPT_LABEL,
 	wrapSteeringForModel,
 } from "./session/messages";
-import { clampProviderContextImages } from "./session/provider-image-budget";
+import { clampProviderContextImages, dropUnreadableContextImages } from "./session/provider-image-budget";
 import {
 	expandDefaultRetryFallbackChains,
 	findRetryFallbackCandidates,
@@ -209,7 +209,6 @@ import {
 	EvalTool,
 	GlobTool,
 	GrepTool,
-	getSearchTools,
 	HIDDEN_TOOLS,
 	isMountableUnderXdev,
 	type LspStartupServerInfo,
@@ -2047,11 +2046,6 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 				customTools.push(ttsTool as unknown as CustomTool);
 			}
 
-			// Add web search tools
-			if (options.toolNames?.includes("web_search")) {
-				customTools.push(...getSearchTools());
-			}
-
 			// Discover custom tools from `.omp/tools/`, `.claude/tools/`, plugins, etc.
 			// Subagents reuse the parent's scan via `preloadedCustomToolPaths` to skip
 			// the FS walk, but ALWAYS re-call `loadCustomTools` here so factories bind
@@ -2149,22 +2143,40 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 		// rebuild their own session-scoped extensions.
 		toolSession.extensionPaths = extensionPaths;
 		toolSession.effectiveExtensionRoots = buildSessionExtensionRoots;
-		toolSession.preparedExtensions = extensionsResult.preparedExtensions;
 
-		// Load inline extensions from factories
+		// Inline source ids must remain stable when caller factories are rebound in
+		// child sessions. Start after any prepared inline sources so SDK-provided
+		// factories (autoresearch/custom tools) keep the same ids as the parent.
+		let nextInlineExtensionIndex = 0;
+		for (const extension of extensionsResult.extensions) {
+			const match = /^<inline-(\d+)>$/.exec(extension.path);
+			if (match) {
+				nextInlineExtensionIndex = Math.max(nextInlineExtensionIndex, Number(match[1]) + 1);
+			}
+		}
+
+		// Load inline extensions from factories. Caller-provided factories are safe
+		// to rebind, so preserve them with file-backed prepared extensions for
+		// `/tan` and other child sessions.
+		const rebindableInlineExtensionCount = options.extensions?.length ?? 0;
 		if (inlineExtensions.length > 0) {
 			for (let i = 0; i < inlineExtensions.length; i++) {
 				const factory = inlineExtensions[i];
-				const loaded = await loadExtensionFromFactory(
-					factory,
-					cwd,
-					eventBus,
-					extensionsResult.runtime,
-					`<inline-${i}>`,
-				);
+				const sourceId = `<inline-${nextInlineExtensionIndex++}>`;
+				const loaded = await loadExtensionFromFactory(factory, cwd, eventBus, extensionsResult.runtime, sourceId);
 				extensionsResult.extensions.push(loaded);
+				if (i < rebindableInlineExtensionCount) {
+					extensionsResult.preparedExtensions ??= [];
+					extensionsResult.preparedExtensions.push({
+						path: sourceId,
+						resolvedPath: sourceId,
+						factory,
+						error: null,
+					});
+				}
 			}
 		}
+		toolSession.preparedExtensions = extensionsResult.preparedExtensions;
 
 		// Process provider registrations queued during extension loading.
 		// This must happen before the runner is created so that models registered by
@@ -2932,6 +2944,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			await ensureWriteRegistered();
 		}
 
+		// oxlint-disable-next-line prefer-const -- captured by device closures before assignment
 		let cursorEventEmitter: ((event: AgentEvent) => void) | undefined;
 		// Cursor and the agent loop may call a mounted device by its top-level
 		// name. Resolve that name from the canonical map and apply the same
@@ -3368,6 +3381,10 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			if (snapcompactInline) transformed = await snapcompactInline.transform(transformed, transformModel);
 			transformed = clampProviderContextImages(transformed, transformModel);
 			transformed = await normalizeProviderContextImagesForModel(transformed, transformModel);
+			// After the model-specific normalizers: they carry better wording for the
+			// cases they own (STB WebP), so this stays the backstop for everything
+			// else, and it runs before the blob broker uploads any of these bytes.
+			transformed = await dropUnreadableContextImages(transformed, transformModel);
 			if (blobBroker) transformed = await blobBroker.decorateContext(transformed, transformModel);
 			// Keep per-request volatility out of the system prompt: the date/cwd
 			// reminder rides on the first user turn so open-weight providers keep
@@ -3629,6 +3646,8 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			settings,
 			additionalExtensionPaths: options.additionalExtensionPaths,
 			extensionRoots: buildSessionExtensionRoots,
+			preparedExtensions: extensionsResult.preparedExtensions,
+			extensionPaths,
 			disableExtensionDiscovery: options.disableExtensionDiscovery,
 			autoApprove: options.autoApprove,
 			scoutAllowedBySpawnPolicy: isScoutSpawnable(undefined, options.spawns ?? "*"),
@@ -4042,6 +4061,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 						let transformed = obfuscator ? obfuscateProviderContext(obfuscator, context) : context;
 						transformed = clampProviderContextImages(transformed, transformModel);
 						transformed = await normalizeProviderContextImagesForModel(transformed, transformModel);
+						transformed = await dropUnreadableContextImages(transformed, transformModel);
 						if (blobBroker) transformed = await blobBroker.decorateContext(transformed, transformModel);
 						return withDateCwdReminder(
 							transformed,

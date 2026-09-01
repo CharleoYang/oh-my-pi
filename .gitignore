@@ -96,3 +96,5 @@ packages/coding-agent/bench/boot-baseline.json
 /.omp/loop.md
 
 /.local/
+
+.parity/
