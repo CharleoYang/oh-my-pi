@@ -50,7 +50,7 @@ Parsing comes from frontmatter via `parseAgentFields()` (`src/discovery/helpers.
 
 OMP discovers user agents from `~/.omp/agent/agents/*.md` and project agents from `.omp/agents/*.md`.
 
-Give the agent a role alias in frontmatter, then dispatch it by name. For model routing, task dispatch sets only `agent`; it does not set a worker model:
+Give the agent a role alias in frontmatter, then dispatch it by name. For model routing, task dispatch defaults to the selected agent; pass `model` only to override that spawn:
 
 `~/.omp/agent/agents/reviewer.md`:
 
@@ -80,6 +80,17 @@ For a dispatch, set the agent name and task:
   "context": "Review the current change in this repository.",
   "tasks": [
     { "agent": "reviewer", "task": "Report concrete correctness findings." }
+  ]
+}
+```
+
+To pin one spawn to a different model without changing the agent definition, pass `model`:
+
+```json
+{
+  "context": "Review the current change in this repository.",
+  "tasks": [
+    { "agent": "reviewer", "model": "tokens/gpt-5.6-terra", "task": "Report concrete correctness findings." }
   ]
 }
 ```
@@ -202,11 +213,12 @@ A missing name fails preflight with `Unknown agent "...". Available: ...`; no su
 
 For task dispatch, model precedence is:
 
-1. `task.agentModelOverrides[agentName]`
-2. the agent frontmatter's prioritized `model` list
-3. the parent's active model, then its configured/default model fallback
+1. the task item's explicit `model` (or eval `agent(..., model=...)`)
+2. `task.agentModelOverrides[agentName]`
+3. the agent frontmatter's prioritized `model` list
+4. the parent's active model, then its configured/default model fallback
 
-Role aliases in either of the first two sources are expanded through `modelRoles`. The shared eval bridge can also supply an invocation-local model override ahead of the settings override; the task wire schema does not expose that field.
+Role aliases in any of those sources are expanded through `modelRoles`. Empty or unresolvable request selectors fall through to the next source.
 
 Runtime output schema precedence is:
 

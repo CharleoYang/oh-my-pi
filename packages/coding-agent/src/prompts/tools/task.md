@@ -29,6 +29,7 @@ Agents marked BLOCKING run inline — results return in this call; non-blocking 
   - `task`: Complete, self-contained instructions. One-liners or missing acceptance criteria are PROHIBITED.
 {{#if effortEnabled}}  - `effort`: Scale w/ complexity of this task: `"lo"`|`"med"`|`"hi"`
 {{/if}}
+  - `model`: Optional per-spawn model (`provider/id`, `@role`, or a fallback list). Omit to use the selected agent's configured model (`task.agentModelOverrides` → agent frontmatter → session fallback).
   - `outputSchema`: Invocation-specific JSON Schema. Overrides the selected agent and parent-session schemas.
   - `schemaMode`: `"permissive"` (default) accepts a retry-exhausted invalid result with a warning; `"strict"` fails it.
 {{#if isolationEnabled}}
@@ -46,6 +47,7 @@ Agents marked BLOCKING run inline — results return in this call; non-blocking 
 - `task`: Complete, self-contained instructions. One-liners or missing acceptance criteria are PROHIBITED.
 {{#if effortEnabled}}- `effort`: Scale w/ complexity of this task: `"lo"`|`"med"`|`"hi"`
 {{/if}}
+- `model`: Optional per-spawn model (`provider/id`, `@role`, or a fallback list). Omit to use the selected agent's configured model (`task.agentModelOverrides` → agent frontmatter → session fallback).
 - `outputSchema`: Invocation-specific JSON Schema. Overrides the selected agent and parent-session schemas.
 - `schemaMode`: `"permissive"` (default) accepts a retry-exhausted invalid result with a warning; `"strict"` fails it.
 {{#if isolationEnabled}}

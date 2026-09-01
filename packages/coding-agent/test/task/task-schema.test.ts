@@ -50,6 +50,29 @@ describe("task schema (single-spawn)", () => {
 			expect("schema" in parsed).toBe(false);
 		}
 	});
+
+	it("accepts an optional per-spawn model selector", () => {
+		const parsed = taskSchema({
+			agent: "scout",
+			task: "Map the auth module.",
+			model: "tokens/gpt-5.6-terra",
+		});
+		expect(parsed instanceof type.errors).toBe(false);
+		if (!(parsed instanceof type.errors)) {
+			expect(parsed.model).toBe("tokens/gpt-5.6-terra");
+		}
+	});
+
+	it("accepts a fallback model list", () => {
+		const parsed = taskSchema({
+			task: "Map the auth module.",
+			model: ["@slow", "openai/gpt-4.1"],
+		});
+		expect(parsed instanceof type.errors).toBe(false);
+		if (!(parsed instanceof type.errors)) {
+			expect(parsed.model).toEqual(["@slow", "openai/gpt-4.1"]);
+		}
+	});
 });
 
 describe("task spawn validation", () => {

@@ -117,6 +117,7 @@ describe("task.batch schema gating", () => {
 		expect(offProperties.context).toBeUndefined();
 		expect(offProperties.task).toBeDefined();
 		expect(offProperties.name).toBeDefined();
+		expect(offProperties.model).toBeDefined();
 		expect(offProperties.outputSchema).toBeDefined();
 		expect(typeof offProperties.outputSchema).toBe("object");
 		expect(offProperties.schemaMode).toBeDefined();
@@ -130,12 +131,14 @@ describe("task.batch schema gating", () => {
 		expect(onProperties.task).toBeUndefined();
 		expect(onProperties.name).toBeUndefined();
 		expect(onProperties.agent).toBeUndefined();
+		expect(onProperties.model).toBeUndefined();
 		expect(onProperties.outputSchema).toBeUndefined();
 		expect(onProperties.schemaMode).toBeUndefined();
 		const itemProperties = getBatchItemProperties(on);
 		expect(itemProperties.task).toBeDefined();
 		expect(itemProperties.name).toBeDefined();
 		expect(itemProperties.agent).toBeDefined();
+		expect(itemProperties.model).toBeDefined();
 		expect(itemProperties.outputSchema).toBeDefined();
 		expect(typeof itemProperties.outputSchema).toBe("object");
 		expect(itemProperties.schemaMode).toBeDefined();
@@ -520,6 +523,44 @@ describe("task.batch spawning", () => {
 		await job.promise;
 		expect(job.status).toBe("completed");
 		expect(capturedContext).toBe("Shared notes.");
+	});
+
+	it("forwards a per-item model override ahead of agentModelOverrides", async () => {
+		mockDiscovery({
+			...taskAgent,
+			model: ["anthropic/claude-sonnet-4"],
+		});
+		const seen: Array<{ id?: string; modelOverride?: string | string[] }> = [];
+		vi.spyOn(executorModule, "runSubprocess").mockImplementation(async options => {
+			seen.push({ id: options.id, modelOverride: options.modelOverride });
+			return makeResult(options.id ?? "?");
+		});
+
+		const manager = createManager();
+		const tool = await TaskTool.create(
+			createSession({
+				manager,
+				settings: {
+					"async.enabled": true,
+					"task.batch": true,
+					"task.agentModelOverrides": { task: "openai/gpt-4.1-mini" },
+				},
+			}),
+		);
+
+		const result = await tool.execute("tc-model-batch", {
+			context: "Shared notes.",
+			tasks: [
+				{ name: "Defaulted", task: "Use the configured model." },
+				{ name: "Pinned", task: "Use an explicit model.", model: "openai/gpt-4o" },
+			],
+		} as TaskParams);
+
+		expect(getFirstText(result)).toContain("Spawned 2 background agents");
+		await Promise.all([manager.getJob("Defaulted")!.promise, manager.getJob("Pinned")!.promise]);
+		const byId = new Map(seen.map(spawn => [spawn.id, spawn]));
+		expect(byId.get("Defaulted")?.modelOverride).toEqual(["openai/gpt-4.1-mini"]);
+		expect(byId.get("Pinned")?.modelOverride).toEqual(["openai/gpt-4o"]);
 	});
 
 	it("accepts the flat single-spawn form at runtime under batch mode", async () => {

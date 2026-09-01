@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Optional per-spawn `model` on the task tool and eval `agent()` helper. Omit it to keep the selected agent's configured model (`task.agentModelOverrides` → frontmatter → session fallback); pass `provider/id` or `@role` to override that spawn only.
+
 ## [18.0.10] - 2026-08-28
 
 ### Added

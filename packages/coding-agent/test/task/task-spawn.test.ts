@@ -148,6 +148,31 @@ describe("task spawn routing", () => {
 		expect(runSpy.mock.calls[0]?.[0].modelOverride).toEqual(["openai/gpt-4.1-mini"]);
 	});
 
+	it("lets a per-spawn model override win over agentModelOverrides", async () => {
+		vi.spyOn(discoveryModule, "discoverAgents").mockResolvedValue({
+			agents: [{ ...taskAgent, model: ["anthropic/claude-sonnet-4"] }],
+			projectAgentsDir: null,
+		});
+		const runSpy = vi.spyOn(executorModule, "runSubprocess").mockImplementation(async options => makeResult(options.id ?? "?"));
+
+		const manager = createManager();
+		const tool = await TaskTool.create(
+			createSession({ manager, settings: { "task.agentModelOverrides": { task: "openai/gpt-4.1-mini" } } }),
+		);
+
+		const result = await tool.execute("tc-model", {
+			agent: "task",
+			name: "Override",
+			task: "Do the thing.",
+			model: "openai/gpt-4o",
+		} as TaskParams);
+
+		const job = manager.getJob(result.details!.async!.jobId)!;
+		await job.promise;
+		expect(job.status).toBe("completed");
+		expect(runSpy.mock.calls[0]?.[0].modelOverride).toEqual(["openai/gpt-4o"]);
+	});
+
 	it("bounds concurrent job bodies with the session spawn semaphore", async () => {
 		vi.spyOn(discoveryModule, "discoverAgents").mockResolvedValue({
 			agents: [taskAgent],

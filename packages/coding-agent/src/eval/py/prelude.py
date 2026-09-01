@@ -495,12 +495,14 @@ if "__omp_prelude_loaded__" not in globals():
         apply=None,
         merge=None,
         handle=False,
+        model=None,
     ):
         """Run a subagent and return its final output or structured data.
 
         `schema` overrides agent and session schemas. `schema_mode` is
         `"permissive"` or `"strict"`. `handle=True` returns the child output
         reference and metadata, with parsed data under `"data"` when available.
+        `model` optionally overrides the selected agent's configured model.
         """
         args = {"prompt": prompt}
         if agent is not None:
@@ -519,6 +521,8 @@ if "__omp_prelude_loaded__" not in globals():
             args["merge"] = bool(merge)
         if handle:
             args["handle"] = True
+        if model is not None:
+            args["model"] = model
         res = _bridge_call("__agent__", args)
         text = res.get("text") if isinstance(res, dict) else res
         has_data = isinstance(res, dict) and "data" in res
