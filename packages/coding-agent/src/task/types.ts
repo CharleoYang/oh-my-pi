@@ -119,6 +119,7 @@ export const taskItemSchema = type({
 	"model?": modelRule,
 	"outputSchema?": outputSchemaInputSchema,
 	"schemaMode?": '"permissive" | "strict"',
+	"tools?": "string[]",
 	"+": "delete",
 });
 const taskItemSchemaIsolated = type({
@@ -128,6 +129,7 @@ const taskItemSchemaIsolated = type({
 	"model?": modelRule,
 	"outputSchema?": outputSchemaInputSchema,
 	"schemaMode?": '"permissive" | "strict"',
+	"tools?": "string[]",
 	"isolated?": "boolean",
 	"+": "delete",
 });
@@ -148,6 +150,8 @@ export interface TaskItem {
 	outputSchema?: unknown;
 	/** Validation behavior for a caller-provided or inherited output schema. */
 	schemaMode?: "permissive" | "strict";
+	/** Eval-defined tool names exposed to this child. */
+	tools?: string[];
 	/** Run this spawn in an isolated worktree (batch form; flat form carries it top-level). */
 	isolated?: boolean;
 }
@@ -159,6 +163,7 @@ export const taskSchema = type({
 	"model?": modelRule,
 	"outputSchema?": outputSchemaInputSchema,
 	"schemaMode?": '"permissive" | "strict"',
+	"tools?": "string[]",
 	"isolated?": "boolean",
 	"+": "delete",
 });
@@ -169,6 +174,7 @@ const taskSchemaNoIsolation = type({
 	"model?": modelRule,
 	"outputSchema?": outputSchemaInputSchema,
 	"schemaMode?": '"permissive" | "strict"',
+	"tools?": "string[]",
 	"+": "delete",
 });
 const taskSchemaBatch = type({
@@ -204,10 +210,12 @@ function createTaskSchema(options: {
 	batchEnabled: boolean;
 	defaultAgent: string;
 	effortEnabled: boolean;
+	evalToolsEnabled: boolean;
 }): BaseType {
 	const agent = taskAgentSchemaRule(options.defaultAgent);
 	const effortField = options.effortEnabled ? { "effort?": effortRule } : {};
 	const modelField = { "model?": modelRule };
+	const toolsField = options.evalToolsEnabled ? { "tools?": "string[]" } : {};
 	if (options.batchEnabled) {
 		if (options.isolationEnabled) {
 			const item = type.raw({
@@ -218,6 +226,7 @@ function createTaskSchema(options: {
 				...effortField,
 				"outputSchema?": outputSchemaInputSchema,
 				"schemaMode?": '"permissive" | "strict"',
+				...toolsField,
 				"isolated?": "boolean",
 				"+": "delete",
 			});
@@ -235,6 +244,7 @@ function createTaskSchema(options: {
 			...effortField,
 			"outputSchema?": outputSchemaInputSchema,
 			"schemaMode?": '"permissive" | "strict"',
+			...toolsField,
 			"+": "delete",
 		});
 		return type.raw({
@@ -252,6 +262,7 @@ function createTaskSchema(options: {
 			...effortField,
 			"outputSchema?": outputSchemaInputSchema,
 			"schemaMode?": '"permissive" | "strict"',
+			...toolsField,
 			"isolated?": "boolean",
 			"+": "delete",
 		});
@@ -264,6 +275,7 @@ function createTaskSchema(options: {
 		...effortField,
 		"outputSchema?": outputSchemaInputSchema,
 		"schemaMode?": '"permissive" | "strict"',
+		...toolsField,
 		"+": "delete",
 	});
 }
@@ -273,18 +285,21 @@ export function getTaskSchema(options: {
 	isolationEnabled: boolean;
 	batchEnabled: boolean;
 	effortEnabled?: boolean;
+	/** Advertise the `tools` field for eval-defined tools (`eval.tools.enabled`, default on). */
+	evalToolsEnabled?: boolean;
 	defaultAgent?: string;
 }): TaskToolSchemaInstance {
 	const defaultAgent = options.defaultAgent ?? "task";
 	const effortEnabled = options.effortEnabled ?? false;
-	if (defaultAgent === "task" && !effortEnabled) {
+	const evalToolsEnabled = options.evalToolsEnabled ?? true;
+	if (defaultAgent === "task" && !effortEnabled && evalToolsEnabled) {
 		if (options.batchEnabled) return options.isolationEnabled ? taskSchemaBatch : taskSchemaBatchNoIsolation;
 		return options.isolationEnabled ? taskSchema : taskSchemaNoIsolation;
 	}
-	const key = `${options.isolationEnabled ? "iso" : "flat"}:${options.batchEnabled ? "batch" : "single"}:${effortEnabled ? "effort" : "default"}:${defaultAgent}`;
+	const key = `${options.isolationEnabled ? "iso" : "flat"}:${options.batchEnabled ? "batch" : "single"}:${effortEnabled ? "effort" : "default"}:${evalToolsEnabled ? "tools" : "notools"}:${defaultAgent}`;
 	const cached = taskSchemaCache.get(key);
 	if (cached) return cached;
-	const schema = createTaskSchema({ ...options, effortEnabled, defaultAgent });
+	const schema = createTaskSchema({ ...options, effortEnabled, evalToolsEnabled, defaultAgent });
 	taskSchemaCache.set(key, schema);
 	return schema;
 }
@@ -309,6 +324,8 @@ export interface TaskParams {
 	outputSchema?: unknown;
 	/** Validation behavior for a caller-provided or inherited output schema. */
 	schemaMode?: "permissive" | "strict";
+	/** Eval-defined tool names exposed to the flat-form child. */
+	tools?: string[];
 	/** Batch form (`task.batch`): one subagent per item. */
 	tasks?: TaskItem[];
 	/** Batch form: shared background prepended to every assignment; required by the batch schema. */
@@ -399,6 +416,8 @@ export interface YieldItem {
 	type?: string | string[];
 	/** Resolve this yield's payload from the latest durable assistant text instead of `data`. */
 	useLastTurn?: boolean;
+	/** True when an incremental workpool yield completed every item in its batch. */
+	complete?: boolean;
 	/**
 	 * Set by the in-tool yield validator when it exhausted its retry budget and
 	 * accepted schema-invalid data anyway. The executor preserves that override

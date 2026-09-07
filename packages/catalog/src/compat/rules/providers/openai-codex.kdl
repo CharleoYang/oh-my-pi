@@ -29,6 +29,27 @@ provider "openai-codex" {
 			cache-write 15.625
 		}
 	}
+	// Codex reports a 272K default and a stale 872K maximum for Astra. Keep
+	// the default explicit so cached 1.05M rows from #11089 cannot bypass the
+	// opt-in; the curated maximum is applied only with extended context on.
+	// The documented total window is 1.05M (922K input plus 128K output).
+	// Codex pricing remains exempt from the API long-context multiplier.
+	models "gpt-6-astra" "gpt-6-astra-wm" {
+		cost-patch {
+			input 10.0
+			output 50.0
+			cache-read 1.0
+			cache-write 0
+		}
+		service-tier-cost {
+			flex 0.5
+			priority 2.5
+		}
+		limits-patch {
+			context-window 272000
+		}
+		max-context-window 1050000
+	}
 	class "openai" {
 		revision ">=5.3 <5.7" {
 			thinking-mode "effort"
@@ -69,9 +90,9 @@ provider "openai-codex" {
 				}
 			}
 		}
-		// First-party GPT-5 Responses SKUs support the freeform apply_patch
+		// First-party GPT-5/GPT-6 Responses SKUs support the freeform apply_patch
 		// custom tool with a Lark grammar.
-		revision ">=5 <6" {
+		revision ">=5 <7" {
 			apply-patch-tool-type "freeform"
 		}
 	}
