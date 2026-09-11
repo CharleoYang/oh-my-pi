@@ -1150,7 +1150,9 @@ function buildAntigravityRequest(
 				{ category: "HARM_CATEGORY_CIVIC_INTEGRITY", threshold: "BLOCK_ONLY_HIGH" },
 			],
 		},
-		requestType: "agent",
+		// No `requestType` here: Google gates the "agent" request type behind a
+		// content-inspection quota that 429s OMP-sized prompts (issue #11689).
+		// Omitting it matches the official CLI wire and stays on chat quota.
 		requestId: `agent-${Date.now()}-${Math.random().toString(36).slice(2, 11)}`,
 		userAgent: "antigravity",
 	};

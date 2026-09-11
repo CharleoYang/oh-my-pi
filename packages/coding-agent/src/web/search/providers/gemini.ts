@@ -428,7 +428,8 @@ async function callGeminiSearch(
 
 	const requestMetadata = auth.isAntigravity
 		? {
-				requestType: "agent",
+				// No `requestType`: the "agent" type trips Google's content-inspection
+				// quota on OMP prompts (issue #11689); omitting matches the CLI wire.
 				userAgent: "antigravity",
 				requestId: `agent-${crypto.randomUUID()}`,
 			}

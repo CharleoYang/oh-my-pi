@@ -1389,13 +1389,15 @@ export function buildRequest(
 			request.generationConfig = generationConfig;
 		}
 		request.sessionId = envelope.sessionId;
+		// No `requestType`: Google gates the "agent" request type behind a
+		// content-inspection quota that 429s OMP-sized prompts (issue #11689).
+		// Omitting it matches the official CLI wire and stays on chat quota.
 		return {
 			project: projectId,
 			requestId: envelope.requestId,
 			request,
 			model: wireModelId,
 			userAgent: "antigravity",
-			requestType: "agent",
 		};
 	}
 
