@@ -99,7 +99,7 @@ To pin one spawn to a different model without changing the agent definition, pas
 
 ## Watch running agents
 
-After dispatch, press `Alt+A` to open [Agent Hub](./agent-hub.md). Its live roster shows each task agent's status, current activity, model, age, and usage. Select an agent to read its transcript and steer it directly; parked agents can be revived from the same view.
+After dispatch, press `Alt+A` to open [Agent Hub](./agent-hub.md). Its live roster shows each task agent's status, current activity, model, age, and usage. Select an agent to read its transcript and steer it directly; parked agents can be revived from the same view. Enable `tui.mouse` to click live task cards and jump-list rows instead, or watch the pinned `Subagents` block above the editor.
 
 ### `vibe_spawn` tier routing
 
@@ -219,6 +219,19 @@ For task dispatch, model precedence is:
 4. the parent's active model, then its configured/default model fallback
 
 Role aliases in any of those sources are expanded through `modelRoles`. Empty or unresolvable request selectors fall through to the next source.
+
+Service-tier precedence is independent of model selection: an exact, case-sensitive
+`task.agentServiceTierOverrides[agentName]` entry overrides `tier.subagent`; an absent entry preserves
+the global behavior. `inherit` snapshots the parent session's live per-family tiers (including
+`/fast` changes) for the next spawn. The child session resolves a concrete value against the model
+it finally settles on — after auth fallback and after patterns only the session can resolve, such as
+extension-registered models — and populates only that model's provider family when the family
+supports the value, so same-family retry fallbacks retain the tier and cross-family fallbacks never
+inherit it. The resolved map is persisted with the child's session, even when it is empty, so a
+parked agent revived after a restart keeps its per-agent tier instead of re-deriving
+`tier.subagent`. The entry is looked up by task/eval dispatch only; Vibe workers launched through
+the same executor keep `tier.subagent`. Service tiers are configuration-only; agent frontmatter and
+the task/eval wire formats do not expose a tier field or automatic Fast policy.
 
 Runtime output schema precedence is:
 

@@ -572,6 +572,7 @@ const streamOpenAIResponsesOnce = (
 						url: requestUrl,
 						headers: headersWithTimeout,
 						body: requestParams,
+						signal: requestSignal,
 						fetch: wrapFetchForCopilotFallback(
 							options?.fetch,
 							model.provider === "github-copilot",
