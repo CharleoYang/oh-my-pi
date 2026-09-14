@@ -38,6 +38,7 @@ describe("AuthStorage OAuth refresh race", () => {
 	afterEach(async () => {
 		vi.restoreAllMocks();
 		setSystemTime();
+		delete Bun.env.OAUTH_DEFINITIVE_REFRESH_RETRY_DELAY_MS;
 		oauthUtils.unregisterOAuthProviders("auth-storage-oauth-refresh-race-test");
 		store?.close();
 		store = null;
@@ -816,6 +817,9 @@ describe("AuthStorage OAuth refresh race", () => {
 
 		const now = Date.parse("2026-07-10T12:30:00.000Z");
 		setSystemTime(new Date(now));
+		// Keep the bounded definitive-failure retries fast in tests.
+		Bun.env.OAUTH_DEFINITIVE_REFRESH_RETRY_DELAY_MS = "1";
+		let stealAttempts = 0;
 		await authStorage.set("unit-oauth-lease-disable", [
 			{
 				type: "oauth",
@@ -838,7 +842,10 @@ describe("AuthStorage OAuth refresh race", () => {
 				// The row still contains the same stale refresh token. Only the lease
 				// fence distinguishes stale owner A from the current row owner.
 				setSystemTime(new Date(now + 16_000));
-				expect(stealLease(credentialId, "peer-owner", now + 31_000)).toBe(true);
+				if (stealAttempts === 0) {
+					expect(stealLease(credentialId, "peer-owner", now + 31_000)).toBe(true);
+				}
+				stealAttempts += 1;
 				throw new Error('HTTP 400 invalid_grant {"error":"invalid_grant"}');
 			},
 			isDefinitiveFailure: error => error instanceof Error && error.message.includes("invalid_grant"),
@@ -846,6 +853,9 @@ describe("AuthStorage OAuth refresh race", () => {
 		});
 
 		expect(disableSpy).toHaveBeenCalled();
+		// The definitive failure is retried a bounded number of times before the
+		// CAS-disable attempt; the peer-held lease fences every one of them.
+		expect(stealAttempts).toBe(3);
 		expect(result).toMatchObject({ refreshed: false, removed: false });
 		expect(result.credential).toMatchObject({
 			type: "oauth",
@@ -958,6 +968,8 @@ describe("AuthStorage OAuth refresh race", () => {
 	test("stops after a definitive refresh failure loses its disable CAS", async () => {
 		if (!authStorage || !store) throw new Error("test setup failed");
 
+		// Keep the bounded definitive-failure retries fast in tests.
+		Bun.env.OAUTH_DEFINITIVE_REFRESH_RETRY_DELAY_MS = "1";
 		await authStorage.set("unit-oauth-definitive-cas-loss", [
 			{
 				type: "oauth",
@@ -966,7 +978,6 @@ describe("AuthStorage OAuth refresh race", () => {
 				expires: Date.now() - 60_000,
 			},
 		]);
-		const controller = new AbortController();
 		let refreshCalls = 0;
 		oauthUtils.registerOAuthProvider({
 			id: "unit-oauth-definitive-cas-loss",
@@ -977,7 +988,6 @@ describe("AuthStorage OAuth refresh race", () => {
 			},
 			async refreshToken() {
 				refreshCalls += 1;
-				if (refreshCalls > 1) controller.abort(new Error("unexpected retry"));
 				throw new Error('HTTP 400 invalid_grant {"error":"invalid_grant"}');
 			},
 			getApiKey(credentials) {
@@ -987,10 +997,10 @@ describe("AuthStorage OAuth refresh race", () => {
 		vi.spyOn(store, "tryDisableAuthCredentialIfMatches").mockReturnValue(false);
 
 		await expect(
-			authStorage.getApiKey("unit-oauth-definitive-cas-loss", "session-cas-loss", {
-				signal: controller.signal,
-			}),
+			authStorage.getApiKey("unit-oauth-definitive-cas-loss", "session-cas-loss"),
 		).resolves.toBeUndefined();
-		expect(refreshCalls).toBe(1);
+		// Bounded: the initial attempt plus the definitive-failure retries, then
+		// stop — the lost disable CAS must not loop on the stale refresh token.
+		expect(refreshCalls).toBe(3);
 	});
 });
