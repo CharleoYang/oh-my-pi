@@ -3815,7 +3815,7 @@ export class AuthStorage {
 	ingestUsageHeaders(
 		provider: Provider,
 		headers: Record<string, string>,
-		options?: { sessionId?: string; baseUrl?: string },
+		options?: { sessionId?: string; baseUrl?: string; responseStatus?: number },
 	): boolean {
 		if (this.#fetchUsageReportsOverride) return false;
 		const parseHeaders = this.#resolveUsageProvider(provider)?.parseRateLimitHeaders;
@@ -3828,7 +3828,7 @@ export class AuthStorage {
 			this.#buildUsageRequestForOauth(provider, credential, options?.baseUrl),
 		);
 		const now = Date.now();
-		const parsedReport = parseHeaders(headers, now);
+		const parsedReport = parseHeaders(headers, now, { responseStatus: options?.responseStatus });
 		if (!parsedReport) return false;
 		// Throttled to one ingest per interval — except when a window reads
 		// exhausted: persist that snapshot immediately. A full-backed cache can
