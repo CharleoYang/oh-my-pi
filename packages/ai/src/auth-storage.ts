@@ -4794,14 +4794,14 @@ export class AuthStorage {
 		};
 	}
 
-	#blockCredentialForRotation(
+	async #blockCredentialForRotation(
 		provider: string,
 		credentialType: AuthCredential["type"],
 		targetIndex: number,
 		blockedUntil: number,
 		routing: CredentialBlockRouting,
 		providerTimed: boolean,
-	): UsageLimitMarkResult {
+	): Promise<UsageLimitMarkResult> {
 		// Snapshot the live block deadline BEFORE this call's mark: the merged
 		// value below masks a pre-existing block shorter than this call's own
 		// request (longest-wins), and recovery that replaces this call's
@@ -4837,12 +4837,48 @@ export class AuthStorage {
 					blockedUntil)
 				: blockedUntil;
 
+		const storedCredentials = this.#getStoredCredentials(provider);
 		const remainingCredentials = this.#getCredentialsForProvider(provider)
 			.map((credential, index) => ({ credential, index }))
 			.filter(
 				(entry): entry is { credential: AuthCredential; index: number } =>
 					entry.credential.type === credentialType && entry.index !== targetIndex,
 			);
+
+		// Fetch usage reports for healable-blocked siblings in parallel so a
+		// stale tier-scoped block (e.g. Anthropic Fable/Mythos weekly reset that
+		// the clock block has not yet expired) doesn't prevent rotation to a
+		// sibling whose tier quota has since replenished. Only fetch for siblings
+		// that are currently blocked AND whose block scope can heal — an unblocked
+		// sibling needs no report, and a non-healable block would waste the fetch.
+		const healableFetches = remainingCredentials
+			.filter((candidate): candidate is { credential: AuthCredential; index: number } & { blocked: true } => {
+				const blocked = this.#getCredentialBlockedUntil(
+					provider,
+					routing.providerKey,
+					candidate.index,
+					routing.siblingBlockScopes,
+				) !== undefined;
+				return blocked && this.#blockedCredentialCanHeal(
+					provider,
+					routing.providerKey,
+					candidate.index,
+					routing.siblingBlockScopes,
+				);
+			})
+			.map(async candidate => {
+				const report = await this.#getUsageReport(provider, candidate.credential, {
+					timeoutMs: this.#usageRequestTimeoutMs,
+				});
+				if (!report || !routing.strategy) return;
+				const scopedLimits = this.#getScopedUsageLimits(routing.strategy, report, routing.rankingContext);
+				if (this.#isUsageLimitReached(scopedLimits)) return;
+				const credentialId = storedCredentials[candidate.index]?.id;
+				if (credentialId !== undefined) {
+					this.#reconcileUsageBlockForCredential(provider, credentialId, report);
+				}
+			});
+		await Promise.all(healableFetches);
 
 		let retryAtMs: number | undefined;
 		for (const candidate of remainingCredentials) {
@@ -4967,7 +5003,7 @@ export class AuthStorage {
 		const targetIndex = this.#getStoredCredentials(provider).findIndex(
 			entry => entry.id === targetCredentialId && entry.credential.type === credentialType,
 		);
-		const rotation = this.#blockCredentialForRotation(
+		const rotation = await this.#blockCredentialForRotation(
 			provider,
 			credentialType,
 			targetIndex,
@@ -7081,14 +7117,14 @@ export class AuthStorage {
 				options?.modelId,
 				modelPolicyScope,
 			);
-			return this.#blockCredentialForRotation(
+			return (await this.#blockCredentialForRotation(
 				provider,
 				sessionCredential.type,
 				sessionCredential.index,
 				Date.now() + AuthStorage.#defaultBackoffMs,
 				routing,
 				false,
-			).switched;
+			)).switched;
 		}
 
 		const providerKey = this.#getProviderTypeKey(provider, sessionCredential.type);
