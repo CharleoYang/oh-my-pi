@@ -65,11 +65,11 @@ describe("AuthStorage definitive OAuth refresh retry", () => {
 			if (refreshCalls === 1) throw invalidGrantError();
 			return { access: "recovered-access", refresh: "recovered-refresh", expires: farExpiry() };
 		});
-		await authStorage.set(PROVIDER, [
+		await authStorage.credentials.set(PROVIDER, [
 			{ type: "oauth", access: "stale-access", refresh: "stale-refresh", expires: Date.now() - 1_000 },
 		]);
 
-		const key = await authStorage.getApiKey(PROVIDER, "s-retry");
+		const key = await authStorage.keys.get(PROVIDER, "s-retry");
 		expect(key).toBe("recovered-access");
 		expect(refreshCalls).toBe(2);
 
@@ -90,11 +90,11 @@ describe("AuthStorage definitive OAuth refresh retry", () => {
 			refreshCalls += 1;
 			throw invalidGrantError();
 		});
-		await authStorage.set(PROVIDER, [
+		await authStorage.credentials.set(PROVIDER, [
 			{ type: "oauth", access: "stale-access", refresh: "stale-refresh", expires: Date.now() - 1_000 },
 		]);
 
-		const key = await authStorage.getApiKey(PROVIDER, "s-exhausted");
+		const key = await authStorage.keys.get(PROVIDER, "s-exhausted");
 		expect(key).toBeUndefined();
 		expect(refreshCalls).toBe(EXPECTED_ATTEMPTS);
 
@@ -111,11 +111,11 @@ describe("AuthStorage definitive OAuth refresh retry", () => {
 			refreshCalls += 1;
 			throw new Error("fetch failed: network unreachable");
 		});
-		await authStorage.set(PROVIDER, [
+		await authStorage.credentials.set(PROVIDER, [
 			{ type: "oauth", access: "stale-access", refresh: "stale-refresh", expires: Date.now() - 1_000 },
 		]);
 
-		const key = await authStorage.getApiKey(PROVIDER, "s-transient");
+		const key = await authStorage.keys.get(PROVIDER, "s-transient");
 		expect(key).toBeUndefined();
 		// Exactly one attempt — transient errors keep the pre-existing no-retry behavior.
 		expect(refreshCalls).toBe(1);

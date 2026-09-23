@@ -163,7 +163,9 @@ describe("task spawn routing", () => {
 			agents: [{ ...taskAgent, model: ["anthropic/claude-sonnet-4"] }],
 			projectAgentsDir: null,
 		});
-		const runSpy = vi.spyOn(executorModule, "runSubprocess").mockImplementation(async options => makeResult(options.id ?? "?"));
+		const runSpy = vi
+			.spyOn(executorModule, "runSubprocess")
+			.mockImplementation(async options => makeResult(options.id ?? "?"));
 
 		const manager = createManager();
 		const tool = await TaskTool.create(
@@ -208,7 +210,6 @@ describe("task spawn routing", () => {
 		expect(runSpy.mock.calls[0]?.[0].modelOverride).toEqual(["openai/gpt-4.1-mini-1"]);
 		expect(runSpy.mock.calls[0]?.[0].modelRoute).toBe("pool 1");
 	});
-
 
 	for (const { label, runnerOverrides, expectRetained } of [
 		{

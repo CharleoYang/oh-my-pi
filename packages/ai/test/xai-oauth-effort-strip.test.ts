@@ -57,7 +57,6 @@ describe("effort-dial-less reasoner encoding (regression)", () => {
 		]);
 	});
 
-
 	test("xai-oauth/grok-4.20-0309-reasoning reasons but carries no thinking config", () => {
 		const grokR = getBundledModel("xai-oauth", "grok-4.20-0309-reasoning");
 		if (!grokR) throw new Error("xai-oauth/grok-4.20-0309-reasoning must be in bundled models.json");

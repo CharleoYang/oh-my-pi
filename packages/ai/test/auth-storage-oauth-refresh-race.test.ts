@@ -998,9 +998,7 @@ describe("AuthStorage OAuth refresh race", () => {
 		});
 		vi.spyOn(store, "tryDisableAuthCredentialIfMatches").mockReturnValue(false);
 
-		await expect(
-			authStorage.keys.get("unit-oauth-definitive-cas-loss", "session-cas-loss"),
-		).resolves.toBeUndefined();
+		await expect(authStorage.keys.get("unit-oauth-definitive-cas-loss", "session-cas-loss")).resolves.toBeUndefined();
 		// Bounded: the initial attempt plus the definitive-failure retries, then
 		// stop — the lost disable CAS must not loop on the stale refresh token.
 		expect(refreshCalls).toBe(3);
