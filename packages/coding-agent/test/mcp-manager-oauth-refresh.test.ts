@@ -20,6 +20,14 @@ import * as oauthFlow from "@oh-my-pi/pi-coding-agent/mcp/oauth-flow";
 import type { MCPServerConfig } from "@oh-my-pi/pi-coding-agent/mcp/types";
 import { removeWithRetries } from "@oh-my-pi/pi-utils";
 
+// This fork retries a definitive `invalid_grant` a bounded number of times
+// before disabling the credential (packages/ai/src/auth/refresh.ts), so the
+// attempt-count expectations below include the retries. Keep the backoff at 1ms
+// so the retry cadence does not slow the suite down.
+process.env.OAUTH_DEFINITIVE_REFRESH_RETRY_DELAY_MS = "1";
+/** Initial attempt plus the bounded definitive-failure retries. */
+const DEFINITIVE_REFRESH_ATTEMPTS = 3;
+
 const CREDENTIAL_ID = "mcp_oauth_test_1908";
 const TOKEN_URL = "https://example.com/oauth/token";
 const STALE_ACCESS = "stale-access-token";
@@ -163,7 +171,7 @@ describe("MCPManager OAuth refresh failure", () => {
 
 		const prepared = await manager.prepareConfig(serverConfig);
 
-		expect(refreshSpy).toHaveBeenCalledTimes(1);
+		expect(refreshSpy).toHaveBeenCalledTimes(DEFINITIVE_REFRESH_ATTEMPTS);
 		expect(refreshSpy).toHaveBeenCalledWith(
 			TOKEN_URL,
 			STALE_REFRESH,
@@ -504,8 +512,8 @@ describe("MCPManager shared SQLite OAuth refresh", () => {
 
 				const resolved = await prepared;
 
-				expect(refreshRequests).toBe(1);
-				expect(refreshTokens).toEqual([SHARED_STALE_REFRESH]);
+				expect(refreshRequests).toBe(DEFINITIVE_REFRESH_ATTEMPTS);
+				expect(refreshTokens).toEqual(Array(DEFINITIVE_REFRESH_ATTEMPTS).fill(SHARED_STALE_REFRESH));
 				expect(getAuthorizationHeader(resolved)).toBe(`Bearer ${SHARED_FRESH_ACCESS}`);
 
 				await authA.credentials.reload();
