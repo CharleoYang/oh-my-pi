@@ -834,6 +834,8 @@ export class InteractiveMode implements InteractiveModeContext {
 	subagentContainer: Container;
 	btwContainer: Container;
 	brailleProgress: BrailleProgressBar | undefined;
+	/** Expander/collapse row of the pinned jump list; click-to-toggle target. */
+	#hudToggleRow: { component: SubagentHudComponent; text: string } | undefined;
 	/** Subagent ids that were rendering as running on the previous HUD flush. */
 	#lastRunningSubagentIds = new Set<string>();
 	/** Recently-settled subagents retained so the bar visibly reaches its end state. */
@@ -3557,8 +3559,24 @@ export class InteractiveMode implements InteractiveModeContext {
 			barTrack: (s: string) => theme.fg("dim", s),
 		};
 
+		// `display.pinnedAgents` owns the pinned jump list this HUD renders: `off`
+		// hides it, `collapsed` shows a few rows plus an expander, `full` lists
+		// every live agent. A click on the expander overrides the setting until
+		// the next settings change (`togglePinnedHudExpanded`).
+		const pinnedMode = settings.get("display.pinnedAgents");
+		if (pinnedMode === "off") {
+			if (this.brailleProgress || this.#hudToggleRow) {
+				this.subagentContainer.disposeChildren();
+				this.brailleProgress = undefined;
+				this.#hudToggleRow = undefined;
+			}
+			return;
+		}
+		const layout = layoutPinnedHud(running.length, this.#pinnedHudOverride ?? pinnedMode === "full");
+		const visibleRunning = running.slice(0, layout.itemRows);
+
 		const tasks: TaskProgress[] = [];
-		for (const s of running) {
+		for (const s of visibleRunning) {
 			const p = s.progress;
 			const tools = p?.toolCount ?? 0;
 			const reqs = p?.requests ?? 0;
@@ -3566,9 +3584,18 @@ export class InteractiveMode implements InteractiveModeContext {
 			// The component's internal rate estimator derives the displayed fill
 			// from `toolCount` — monotonic, never-regressing, learned from prior
 			// completed members. The HUD only reports raw facts.
+			// Row shape matches the pinned jump list this HUD replaces: `Id: description`.
+			// The id leads because it is the click target's identity — the description
+			// alone cannot tell two same-task spawns apart. An echoing description is
+			// dropped rather than repeated.
+			const displayId = formatTaskId(s.id);
+			const detail = s.description?.trim() || p?.task?.trim() || s.label || undefined;
 			tasks.push({
 				id: s.id,
-				label: s.description?.trim() || p?.task?.trim() || s.label || s.id,
+				label:
+					detail && !labelEchoesHandle(s.id, detail) && detail !== displayId
+						? `${displayId}: ${detail}`
+						: displayId,
 				progress: 1,
 				phase: "running",
 				meta,
@@ -3596,9 +3623,10 @@ export class InteractiveMode implements InteractiveModeContext {
 		}
 
 		if (tasks.length === 0) {
-			if (this.brailleProgress) {
+			if (this.brailleProgress || this.#hudToggleRow) {
 				this.subagentContainer.disposeChildren();
 				this.brailleProgress = undefined;
+				this.#hudToggleRow = undefined;
 			}
 			return;
 		}
@@ -3609,6 +3637,28 @@ export class InteractiveMode implements InteractiveModeContext {
 			this.subagentContainer.addChild(this.brailleProgress);
 		} else {
 			this.brailleProgress.setTasks(tasks);
+		}
+
+		// Expander sits directly under the painted rows and maps its own single row
+		// to the reserved toggle id, so the click router flips the list instead of
+		// looking the row up as an agent.
+		const toggleText =
+			layout.toggle === undefined
+				? undefined
+				: ` ${theme.fg(
+						"dim",
+						layout.toggle === "expand" ? `… ${running.length - layout.itemRows} more — expand` : "… show less",
+					)}`;
+		if (toggleText === undefined) {
+			if (this.#hudToggleRow) {
+				this.subagentContainer.removeChild(this.#hudToggleRow.component);
+				this.#hudToggleRow = undefined;
+			}
+		} else if (this.#hudToggleRow?.text !== toggleText) {
+			if (this.#hudToggleRow) this.subagentContainer.removeChild(this.#hudToggleRow.component);
+			const component = new SubagentHudComponent([toggleText], [], 0);
+			this.#hudToggleRow = { component, text: toggleText };
+			this.subagentContainer.addChild(component);
 		}
 	}
 	async #loadTodoList(source: AgentSession = this.session): Promise<void> {

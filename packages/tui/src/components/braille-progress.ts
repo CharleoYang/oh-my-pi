@@ -272,6 +272,9 @@ export class BrailleProgressBar implements Component {
 	#timer: ReturnType<typeof setTimeout> | undefined;
 	#paddingX = 1;
 	#customBgFn?: (text: string) => string;
+	/** Row → task id for the last render (header row included as `undefined`), so
+	 *  the host's click-to-focus hit-test maps painted rows back to sessions. */
+	#rowOwners: (string | undefined)[] = [];
 
 	/** Rate-based completion estimator, fed incrementally by {@link setTasks}.
 	 *  `catchupTimeMs` is tuned snappier than the kimi-code default so the fill
@@ -397,10 +400,13 @@ export class BrailleProgressBar implements Component {
 		const now = this.#nowMs;
 
 		// Header — accent bold
+		const owners: (string | undefined)[] = [undefined];
 		lines.push(`${pad}${c.accent(c.bold(`${c.muted("▸")} ${this.#label}`))}`);
 
 		if (this.#tasks.length === 0) {
 			lines.push(`${pad}  ${c.dim("no tasks")}`);
+			owners.push(undefined);
+			this.#rowOwners = owners;
 			return lines;
 		}
 
@@ -426,6 +432,7 @@ export class BrailleProgressBar implements Component {
 			const meta = task.meta ? ` ${c.dim(task.meta)}` : "";
 			const line = `${pad}  ${c[color](glyph)} ${bar} ${c.text(task.label)}${meta}`;
 			lines.push(line);
+			owners.push(task.id);
 
 			// Live activity under a running bar — the current tool plus the last
 			// few output lines, so it reads as working rather than hung.
@@ -441,17 +448,27 @@ export class BrailleProgressBar implements Component {
 					lines.push(
 						`${indent}  ${c.barTrack("·")} ${c.muted(truncateToWidth(replaceWhitespace(current), activityBudget))}`,
 					);
+					// Activity rows belong to the row they annotate: a click anywhere in
+					// the block focuses that subagent.
+					owners.push(task.id);
 				}
 				for (const out of (a.output ?? []).slice(0, 3)) {
 					if (!out) continue;
 					lines.push(
 						`${indent}  ${c.barTrack("·")} ${c.barTrack(truncateToWidth(replaceWhitespace(out), activityBudget))}`,
 					);
+					owners.push(task.id);
 				}
 			}
 		}
 
+		this.#rowOwners = owners;
 		return this.#customBgFn ? lines.map(l => this.#customBgFn!(l)) : lines;
+	}
+
+	/** Subagent id painted at `row` (0 = the header), or `undefined` for chrome. */
+	getClickAgentAtRow(row: number): string | undefined {
+		return row >= 0 && row < this.#rowOwners.length ? this.#rowOwners[row] : undefined;
 	}
 }
 
