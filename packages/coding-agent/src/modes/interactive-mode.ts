@@ -679,7 +679,7 @@ export class SubagentHudComponent implements Component {
 	}
 }
 
-const SUBAGENT_OBSERVER_UI_COALESCE_MS = 100;
+export const SUBAGENT_OBSERVER_UI_COALESCE_MS = 100;
 /** How long a just-settled subagent row stays at its terminal bar before leaving. */
 const SUBAGENT_COMPLETE_ROW_GRACE_MS = 3000;
 
@@ -3501,7 +3501,9 @@ export class InteractiveMode implements InteractiveModeContext {
 	 */
 	#renderSubagentList(): void {
 		const sessions = this.#observerRegistry.getSessions();
-		const running = sessions.filter(s => s.kind === "subagent" && s.status === "active" && s.detached === true);
+		// Every live subagent belongs on the pinned jump list — sync task calls and
+		// detached background spawns alike — so a click always has a row to hit.
+		const running = sessions.filter(isHudSubagent);
 		const now = Date.now();
 
 		// Detect subagents that just left the running set and retain them so the

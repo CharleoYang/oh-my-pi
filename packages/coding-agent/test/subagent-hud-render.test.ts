@@ -14,6 +14,7 @@ import {
 	InteractiveMode,
 	layoutPinnedHud,
 	renderSubagentHudLines,
+	SUBAGENT_OBSERVER_UI_COALESCE_MS,
 	SubagentHudComponent,
 } from "@oh-my-pi/pi-coding-agent/modes/interactive-mode";
 import { type ObservableSession, SessionObserverRegistry } from "@oh-my-pi/pi-tui/overlays/session-observer-registry";
@@ -609,7 +610,10 @@ describe("InteractiveMode subagent observer UI sync", () => {
 		}
 
 		await Promise.resolve();
-		vi.runAllTimers();
+		// The braille HUD animates continuously while any agent runs (one frame
+		// every FRAME_INTERVAL_MS), so `runAllTimers()` never terminates here.
+		// Advance past the observer coalescing window instead.
+		vi.advanceTimersByTime(SUBAGENT_OBSERVER_UI_COALESCE_MS * 2);
 		await Promise.resolve();
 
 		const hud = Bun.stripANSI(mode.subagentContainer.render(120).join("\n"));
