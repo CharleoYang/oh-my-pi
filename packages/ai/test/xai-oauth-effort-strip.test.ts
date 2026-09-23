@@ -44,6 +44,20 @@ describe("effort-dial-less reasoner encoding (regression)", () => {
 		]);
 	});
 
+	test("xai-oauth/grok-4.7 keeps the grok-4.6 effort dial including xhigh", () => {
+		const grok47 = getBundledModel("xai-oauth", "grok-4.7");
+		if (!grok47) throw new Error("xai-oauth/grok-4.7 must be in bundled models.json");
+		expect(grok47.contextWindow).toBe(500000);
+		expect(getSupportedEfforts(grok47)).toEqual([
+			Effort.Minimal,
+			Effort.Low,
+			Effort.Medium,
+			Effort.High,
+			Effort.XHigh,
+		]);
+	});
+
+
 	test("xai-oauth/grok-4.20-0309-reasoning reasons but carries no thinking config", () => {
 		const grokR = getBundledModel("xai-oauth", "grok-4.20-0309-reasoning");
 		if (!grokR) throw new Error("xai-oauth/grok-4.20-0309-reasoning must be in bundled models.json");
