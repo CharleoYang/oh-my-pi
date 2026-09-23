@@ -2,7 +2,7 @@
 User message contains **workflowz** → deterministic multi-subagent workflow. Default to `workpool()` for 2+ independent items; use individual `agent()` handles only for dependency-coupled or schema-returning calls.
 
 <when>
-Use for broad research, reviews, migrations, adversarial coverage, and open-ended work lists. Quick lookup/single edit: direct; no agents. {{#if scoutAvailable}}Scout inline FIRST{{else}}Explore inline FIRST{{/if}} — scope files, call sites, and contracts before creating the pool.
+Use for broad research, reviews, migrations, adversarial coverage, and open-ended work lists. Quick lookup/single edit: direct; no agents. {{#if scoutAvailable}}Dispatch scouting to a scout subagent FIRST{{else}}Dispatch exploration to a subagent FIRST{{/if}} — scope files, call sites, and contracts before creating the pool. Keep the main turn lean; let cheap read-only subagents do the digging.
 
 Pool-first phases:
 - **Understand**: queue subsystem readers → poll pool job → synthesize
