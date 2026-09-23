@@ -364,6 +364,12 @@ console.log(JSON.stringify({ id: TERMINAL_ID, imageProtocol: TERMINAL.imageProto
  * the runner's environment, strips every terminal-identification marker and
  * image-protocol pin, then applies the caller's overrides. Keeps the suite
  * independent of which terminal it runs inside (full-suite safe).
+ *
+ * `undefined` in `overrides` means "unset", not "inherit": `Bun.spawn` keeps
+ * the parent's value for an explicitly undefined entry, so the test-runtime
+ * markers (`PI_TEST_RUNTIME`, `BUN_ENV`, `NODE_ENV` — the repo's own CI runner
+ * exports `PI_TEST_RUNTIME=1`) would otherwise leak into the child and make
+ * `resolveTmuxClientTerminalName` correctly report `null` under test.
  */
 function subprocessEnv(overrides: Record<string, string | undefined>): Record<string, string | undefined> {
 	const env: Record<string, string | undefined> = { ...Bun.env };
@@ -383,7 +389,11 @@ function subprocessEnv(overrides: Record<string, string | undefined>): Record<st
 	]) {
 		delete env[key];
 	}
-	return { ...env, ...overrides };
+	const merged = { ...env, ...overrides };
+	for (const [key, value] of Object.entries(merged)) {
+		if (value === undefined) delete merged[key];
+	}
+	return merged;
 }
 
 describe("otty terminal capabilities", () => {
