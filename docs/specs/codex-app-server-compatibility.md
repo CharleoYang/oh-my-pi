@@ -40,8 +40,8 @@ Codex-shaped JSONL transport and translates into the existing `AgentSession`:
 
 The existing upstream Codex Responses transport now preserves an explicitly
 provided `User-Agent` for an authorized gateway, while defaulting to the
-truthful `omp/<version>` value. Its `originator` remains `pi`; changing only a
-header must not claim to be `codex_cli_rs` or `codex_vscode`.
+truthful `omp/<version>` value. Its `originator` remains the OMP-registered
+`omp`; changing only a header must not claim to be `codex_cli_rs` or `codex_vscode`.
 
 Do not make `--mode rpc` silently change semantics: existing ACP/RPC clients
 depend on its current `{type: ...}` protocol. Do not send `clientInfo.name` as

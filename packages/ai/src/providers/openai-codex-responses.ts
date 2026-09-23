@@ -4490,7 +4490,7 @@ function createCodexHeaders(
 	headers.delete(OPENAI_HEADERS.BETA);
 	headers.delete("openai-beta");
 	headers.set(OPENAI_HEADERS.BETA, betaHeader);
-	// Honest OMP `pi` identity by default; an explicit caller-configured
+	// Honest OMP identity by default; an explicit caller-configured
 	// `originator` (e.g. a token gateway wired for official Codex clients in
 	// models.yml `headers`) is preserved so the operator can opt into the
 	// gateway's allowlisted client attribution. Defaulting stays truthful.
@@ -4500,7 +4500,7 @@ function createCodexHeaders(
 	headers.set(OPENAI_HEADERS.VERSION, codexClientVersion);
 	// Keep the honest OMP identity by default, while honoring an explicit
 	// caller-supplied User-Agent for authorized gateways that require their own
-	// client attribution. The Codex originator remains OMP's registered `pi`
+	// client attribution. The Codex originator remains OMP's registered `omp`
 	// value; callers cannot silently turn this transport into an official Codex
 	// client by changing one header.
 	if (!headers.has("User-Agent")) headers.set("User-Agent", getTestCodexUserAgent() ?? USER_AGENT);

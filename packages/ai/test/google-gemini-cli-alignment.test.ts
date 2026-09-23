@@ -261,7 +261,11 @@ describe("Google Gemini CLI alignment", () => {
 		};
 
 		expect(payload.request.sessionId).toMatch(/^-[0-9]+$/);
-		expect(payload.requestType).toBe("agent");
+		// Local divergence: the wire omits `requestType: "agent"` on purpose. Google
+		// gates that request type behind a content-inspection quota that 429s
+		// OMP-sized prompts while the same account succeeds untagged (issue #11689);
+		// chat quota applies instead. Everything else stays on the official wire.
+		expect("requestType" in payload).toBe(false);
 		expect(payload.userAgent).toBe("antigravity");
 		// Structured requestId: agent/<agentId>/<ts>/<trajectoryId>/<step>.
 		expect(payload.requestId).toMatch(/^agent\/[0-9a-f-]+\/\d+\/[0-9a-f-]+\/\d+$/);

@@ -419,7 +419,7 @@ describe("openai-codex streaming", () => {
 
 		expect(result.stopReason).toBe("stop");
 		expect(requestHeaders?.get("User-Agent")).toBe("authorized-gateway/1.0");
-		expect(requestHeaders?.get("originator")).toBe("pi");
+		expect(requestHeaders?.get("originator")).toBe("omp");
 	});
 
 	it("uses the explicit security-test Codex User-Agent override", async () => {
