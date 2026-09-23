@@ -26,7 +26,7 @@ class "xai" {
 			}
 		}
 	}
-	// First-party xhigh-capable SKUs (grok-4.6/4.7, multi-agent) advertise xhigh.
+	// First-party xhigh-capable SKUs (grok-4.6, grok-4.7, multi-agent) advertise xhigh.
 	on "xai" "xai-oauth" {
 		family "grok" {
 			models "grok-4.6*" "grok-4.7*" "grok-4.20-multi-agent*" {

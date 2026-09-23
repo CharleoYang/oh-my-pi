@@ -58,6 +58,7 @@ provider "xai-oauth" {
 			cost input=0 output=0 cache-read=0 cache-write=0
 			limits context=500000 max-tokens=500000
 		}
+		// 500K context per docs.x.ai/developers/models/grok-4.7.
 		model "grok-4.7" name="Grok 4.7" {
 			reasoning #true
 			input "text" "image"
