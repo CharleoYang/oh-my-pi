@@ -17,7 +17,13 @@ export function wrapTmuxPassthroughIfNeeded(payload: string, env: NodeJS.Process
 }
 
 const CLIENT_TERMTYPE_NAME = /^([A-Za-z][A-Za-z0-9._+-]*)(?=\s|\(|$)/u;
-const CLIENT_TERMTYPE_TIMEOUT_MS = 500;
+// One `tmux display-message` round trip over the server socket, which answers in
+// single-digit milliseconds when healthy. 500ms kept losing the race to a
+// loaded machine (fork/exec of the tmux client alone can exceed it on a
+// saturated box), and a lost race is indistinguishable from "not tmux": the
+// process then falls back to the true-color profile for the whole session. 2s
+// bounds the startup stall only when tmux is genuinely wedged.
+const CLIENT_TERMTYPE_TIMEOUT_MS = 2_000;
 let cachedClientTerminalName: string | null | undefined;
 
 function queryTmuxClientTerminalName(env: NodeJS.ProcessEnv): string | null {
