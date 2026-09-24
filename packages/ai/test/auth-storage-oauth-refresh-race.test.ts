@@ -33,6 +33,10 @@ describe("AuthStorage OAuth refresh race", () => {
 				events.push(event);
 			},
 		});
+		// This fork retries a definitive `invalid_grant` (1 + 2 attempts) before
+		// disabling. Keep the backoff at 1ms: the default 1s linear schedule would
+		// push every mocked-refresh failure past the per-test timeout.
+		Bun.env.OAUTH_DEFINITIVE_REFRESH_RETRY_DELAY_MS = "1";
 	});
 
 	afterEach(async () => {

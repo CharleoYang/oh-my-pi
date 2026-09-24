@@ -5,8 +5,8 @@ User message contains **workflowz** → deterministic multi-subagent workflow. D
 Use for broad research, reviews, migrations, adversarial coverage, and open-ended work lists. Quick lookup/single edit: direct; no agents. {{#if scoutAvailable}}Dispatch scouting to a scout subagent FIRST{{else}}Dispatch exploration to a subagent FIRST{{/if}} — scope files, call sites, and contracts before creating the pool. Keep the main turn lean; let cheap read-only subagents do the digging.
 
 Pool-first phases:
-- **Understand**: queue subsystem readers → poll pool job → synthesize
-- **Review**: queue one item per lens/file → poll → verify survivors
+- **Understand**: queue subsystem readers → collect results → synthesize
+- **Review**: queue one item per lens/file → collect results → verify survivors
 - **Migrate**: discover sites → queue file-disjoint transforms → verify once
 - **Research**: queue modalities/sources → deep-read hits → synthesize
 - **Design**: queue independent proposals/judges → choose and integrate
@@ -21,7 +21,7 @@ State persists across `eval` calls. Every call provides:
 - `agent(prompt, *, agent=None, label=None, schema=None, isolated=None, apply=None, merge=None, model=None{{#if evalTools}}, tools=None{{/if}})`: immediate `AgentHandle`; use for a small fixed dependency graph or when the parent needs validated `schema` data. `.wait()` returns text/data; `.handle` is `agent://<id>`. Unwaited results auto-deliver. `model` optional per-call selector (`provider/id`, `@role`); omit to use the selected agent's configured model.
 - `completion(prompt, *, model="default", system=None, schema=None)`: immediate `CompletionHandle` for a tool-free one-shot call. Tiers: `"smol"`, `"default"`, `"slow"`.
 - `await judge(state, questions)`: typed `choice`/`bool`/`score` questions over one state → `{id: answer}` with probabilities. Cheaper than `completion()` for classification.
-- `judge_batch(states, questions, *, concurrency=32, retries=1, min_ok=1, intent=None)`: the same questions over many states, run by the host so it outlives the cell. Set nonempty `intent` for its progress/job label (default `"Judging"`). Returns a `JudgmentBatch` at once; per cell pull a bounded slice with `await b.drain(timeout)` (or `async for k, item in b.drain_iter(timeout)`), read `b.status()`/`b.results()`/`b.failed()`, and `b.close()` when done. Item failures are `item.error`, never exceptions; `b.id` is a background job id (auto-delivers, `hub wait`). Never loop `judge()` over a list.
+- `judge_batch(states, questions, *, concurrency=32, retries=1, min_ok=1, intent=None)`: the same questions over many states, run by the host so it outlives the cell. Set nonempty `intent` for its progress/job label (default `"Judging"`). Returns a `JudgmentBatch` at once; per cell pull a bounded slice with `await b.drain(timeout)` (or `async for k, item in b.drain_iter(timeout)`), read `b.status()`/`b.results()`/`b.failed()`, and `b.close()` when done. Item failures are `item.error`, never exceptions; `b.id` is a background job id (results auto-deliver). Never loop `judge()` over a list.
 - `wait(handles, timeout=None, *, raise_errors=True)`: ordered barrier for agent/completion handles only; `raise_errors=False` keeps an error in its slot.
 {{#if evalTools}}- `@tool` (Python) / `tool(fn, {…})` (JS): kernel-local tool exposed via `tools=`. Use for shared caches, dedup sets, scoring, or structured accumulation across pool workers; calls execute in YOUR kernel and a raised exception returns to the caller without killing it.
 {{/if}}- `log(message)`: progress line. `phase(title)`: status-tree phase.
@@ -33,7 +33,7 @@ State persists across `eval` calls. Every call provides:
 2. Create ONE explicitly named pool per phase.
 3. Push every known item in one cell; later discoveries MAY be pushed while the pool job is still running.
 4. Continue useful local work. Results auto-deliver.
-5. Completely blocked? Poll `hub wait` with `ids:[pool-name]`, never `pool.wait()`.
+5. Completely blocked? Leave `eval` and call `wait`; never poll or call `pool.wait()`.
 6. Read every batch result; YOU verify and integrate.
 
 **Python:**
@@ -47,7 +47,7 @@ review.push(*[
     "Review cancellation and cleanup",
     "Review performance regressions",
 ])
-print(review.name)   # poll outside eval: hub wait, ids:["review"]
+print(review.name)   # background job id; results auto-deliver
 ```
 
 **JavaScript:**
@@ -64,7 +64,7 @@ await review.push(
     "Review cancellation and cleanup",
     "Review performance regressions",
 );
-console.log(review.name); // poll outside eval: hub wait, ids:["review"]
+console.log(review.name); // background job id; results auto-deliver
 ```
 
 Need a snapshot without consuming/delivering results? `review.peek()` (JS: `await review.peek()`). Need activity counts? `review.status()`.
