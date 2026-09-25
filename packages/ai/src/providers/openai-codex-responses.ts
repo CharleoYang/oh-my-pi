@@ -286,8 +286,16 @@ const CODEX_ADDITIONAL_PROGRESS_EVENT_TYPES = new Set(["response.done", "respons
 // whitespace-only function-call argument deltas forever. Those frames count as
 // transport activity, so idle timers never fire; cap the run before raw debug
 // buffers and partial JSON grow without semantic progress.
-const CODEX_WHITESPACE_TOOL_CALL_ARGUMENT_DELTA_EVENT_LIMIT = 256;
-const CODEX_WHITESPACE_TOOL_CALL_ARGUMENT_DELTA_CHAR_LIMIT = 16 * 1024;
+// Some internal gateways (e.g. the sankuai tokens provider) use short whitespace
+// deltas as connection keep-alive while a long tool-call argument is still being
+// assembled; `PI_CODEX_WHITESPACE_DELTA_EVENT_LIMIT` / `_CHAR_LIMIT` raise the
+// breaker for those platforms. Official Codex keeps the tight defaults.
+const CODEX_WHITESPACE_TOOL_CALL_ARGUMENT_DELTA_EVENT_LIMIT = Number(
+	$env.PI_CODEX_WHITESPACE_DELTA_EVENT_LIMIT || 256,
+);
+const CODEX_WHITESPACE_TOOL_CALL_ARGUMENT_DELTA_CHAR_LIMIT = Number(
+	$env.PI_CODEX_WHITESPACE_DELTA_CHAR_LIMIT || 16 * 1024,
+);
 const CODEX_WHITESPACE_LOOP_RETRY_LIMIT = 2;
 const CODEX_WHITESPACE_LOOP_RETRY_DELAY_MS = 250;
 
