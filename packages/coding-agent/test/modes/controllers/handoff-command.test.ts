@@ -71,6 +71,7 @@ describe("/handoff command", () => {
 			showStatus: vi.fn(),
 			showWarning: vi.fn(),
 			showError: vi.fn(),
+			keybindings: { getKeys: () => ["escape"] },
 		} as unknown as InteractiveModeContext;
 		const controller = new CommandController(ctx);
 
@@ -127,6 +128,7 @@ describe("/handoff command", () => {
 			showStatus: vi.fn(),
 			showWarning: vi.fn(),
 			showError: vi.fn(),
+			keybindings: { getKeys: () => ["escape"] },
 		} as unknown as InteractiveModeContext;
 		const controller = new CommandController(ctx);
 
@@ -186,6 +188,7 @@ describe("/handoff command", () => {
 			showStatus: vi.fn(),
 			showWarning: vi.fn(),
 			showError: vi.fn(),
+			keybindings: { getKeys: () => ["escape"] },
 		} as unknown as InteractiveModeContext;
 		const controller = new CommandController(ctx);
 
@@ -242,6 +245,7 @@ describe("/handoff command", () => {
 			showStatus: vi.fn(),
 			showWarning: vi.fn(),
 			showError: vi.fn(),
+			keybindings: { getKeys: () => ["escape"] },
 		} as unknown as InteractiveModeContext;
 		const controller = new CommandController(ctx);
 
@@ -279,6 +283,7 @@ describe("/handoff command", () => {
 			showError,
 			showStatus: vi.fn(),
 			showWarning: vi.fn(),
+			keybindings: { getKeys: () => ["escape"] },
 		} as unknown as InteractiveModeContext;
 		const controller = new CommandController(ctx);
 
@@ -305,6 +310,7 @@ describe("/handoff command", () => {
 			ui: { requestRender: vi.fn(), requestComponentRender: vi.fn() },
 			showWarning,
 			showError: vi.fn(),
+			keybindings: { getKeys: () => ["escape"] },
 			showStatus: vi.fn(),
 		} as unknown as InteractiveModeContext;
 		const controller = new CommandController(ctx);
@@ -336,6 +342,7 @@ describe("/handoff command", () => {
 			ui: { requestRender: vi.fn(), requestComponentRender: vi.fn() },
 			showWarning,
 			showError: vi.fn(),
+			keybindings: { getKeys: () => ["escape"] },
 			showStatus: vi.fn(),
 		} as unknown as InteractiveModeContext;
 		const controller = new CommandController(ctx);
