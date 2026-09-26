@@ -297,9 +297,7 @@ const CODEX_ADDITIONAL_PROGRESS_EVENT_TYPES = new Set(["response.done", "respons
 // deltas as connection keep-alive while a long tool-call argument is still being
 // assembled; `PI_CODEX_WHITESPACE_DELTA_EVENT_LIMIT` / `_CHAR_LIMIT` raise the
 // breaker for those platforms. Official Codex keeps the tight defaults.
-const CODEX_WHITESPACE_TOOL_CALL_ARGUMENT_DELTA_EVENT_LIMIT = Number(
-	$env.PI_CODEX_WHITESPACE_DELTA_EVENT_LIMIT || 256,
-);
+const CODEX_WHITESPACE_TOOL_CALL_ARGUMENT_DELTA_EVENT_LIMIT = Number($env.PI_CODEX_WHITESPACE_DELTA_EVENT_LIMIT || 256);
 const CODEX_WHITESPACE_TOOL_CALL_ARGUMENT_DELTA_CHAR_LIMIT = Number(
 	$env.PI_CODEX_WHITESPACE_DELTA_CHAR_LIMIT || 16 * 1024,
 );

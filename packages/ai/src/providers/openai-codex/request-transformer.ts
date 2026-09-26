@@ -172,15 +172,18 @@ function getReasoningConfig(
 
 /**
  * Wire effort to send when native reasoning is disabled (`options.reasoningOff`).
- * Models whose endpoint rejects the `none` tier (gpt-6-astra: supported efforts
- * are low..max) must floor to the lowest supported effort; `none-effort` models
- * (gpt-5.6-sol/terra, gpt-6-sol/luna) keep the bare `none`.
+ *
+ * Only the gpt-6-astra Codex endpoint rejects the bare `none` tier (`Unsupported
+ * value: 'none'`; its supported efforts are low..max), so a reasoning-off request
+ * to it must floor to the lowest supported effort. Every other model accepts the
+ * bare `none` — the catalog's `lowest-effort` disable-mode is the *default* for
+ * the whole GPT line, so keying the floor off the mode would wrongly floor models
+ * (e.g. gpt-5.5) that take `none` fine. The completions transport handles Astra
+ * via the catalog instead; here we match Astra by id so default-mode models keep
+ * the upstream bare `none`.
  */
-function disabledReasoningEffort(
-	model: Model<"openai-codex-responses">,
-	options: CodexRequestOptions,
-): Partial<ReasoningConfig> {
-	if (model.compat.reasoningDisableMode === "lowest-effort" && model.compat.supportsReasoningEffort) {
+function disabledReasoningEffort(model: Model<"openai-codex-responses">): Partial<ReasoningConfig> {
+	if (model.id.includes("astra")) {
 		const minEffort = getSupportedEfforts(model)[0];
 		if (minEffort !== undefined) {
 			return { effort: mapOpenAIReasoningEffort(model, model.compat, minEffort) as ReasoningConfig["effort"] };
@@ -507,7 +510,7 @@ export async function transformRequestBody(
 
 	if (options.reasoningOff || options.reasoningEffort !== undefined || responsesLite) {
 		const reasoningConfig: Partial<ReasoningConfig> = options.reasoningOff
-			? disabledReasoningEffort(model, options)
+			? disabledReasoningEffort(model)
 			: options.reasoningEffort !== undefined
 				? getReasoningConfig(model, options.reasoningEffort, options)
 				: {};

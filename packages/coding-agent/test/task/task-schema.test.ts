@@ -72,6 +72,7 @@ describe("task schema (single-spawn)", () => {
 		const parsed = taskSchema({
 			agent: "scout",
 			task: "Map the auth module.",
+			complexity: "c",
 			model: "tokens/gpt-5.6-terra",
 		});
 		expect(parsed instanceof type.errors).toBe(false);
@@ -83,6 +84,7 @@ describe("task schema (single-spawn)", () => {
 	it("accepts a fallback model list", () => {
 		const parsed = taskSchema({
 			task: "Map the auth module.",
+			complexity: "c",
 			model: ["@slow", "openai/gpt-4.1"],
 		});
 		expect(parsed instanceof type.errors).toBe(false);
