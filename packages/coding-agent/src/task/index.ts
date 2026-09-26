@@ -277,6 +277,7 @@ function resolveSpawnItems(params: TaskParams): TaskItem[] {
 		return params.tasks;
 	}
 	const item: TaskItem = { name: params.name, agent: params.agent, task: params.task };
+	if ("complexity" in params) item.complexity = params.complexity;
 	if ("outputSchema" in params) item.outputSchema = params.outputSchema;
 	if ("schemaMode" in params) item.schemaMode = params.schemaMode;
 	if ("tools" in params) item.tools = params.tools;
@@ -299,6 +300,7 @@ function spawnParamsFor(params: TaskParams, item: TaskItem, defaultAgent: string
 	const spawn: TaskParams = { agent: item.agent?.trim() || defaultAgent };
 	if (item.name !== undefined) spawn.name = item.name;
 	if (item.task !== undefined) spawn.task = item.task;
+	if (item.complexity !== undefined) spawn.complexity = item.complexity;
 	if (params.context !== undefined) spawn.context = params.context;
 	if ("outputSchema" in item) spawn.outputSchema = item.outputSchema;
 	if ("schemaMode" in item) spawn.schemaMode = item.schemaMode;
@@ -608,7 +610,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 
 	/** Dynamic description that reflects current task settings. */
 	get description(): string {
-		const disabledAgents = cfgTaskDisabledAgents.get(this.session.settings) as string[];
+		const disabledAgents = cfgTaskDisabledAgents.get(this.session.settings);
 		const planMode = this.session.getPlanModeState?.()?.enabled === true;
 		const isolationEnabled = cfgTaskIsolationEnabled.get(this.session.settings);
 		return renderDescription({
@@ -757,7 +759,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 		const manager = asyncEnabled ? this.session.asyncJobManager : undefined;
 		const asyncItems = manager ? spawnItems.filter((_, index) => !itemBlocking[index]) : [];
 		const depthCapacity = canSpawnAtDepth(
-			cfgTaskMaxRecursionDepth.get(this.session.settings) ?? 2,
+			cfgTaskMaxRecursionDepth.get(this.session.settings),
 			this.session.taskDepth ?? 0,
 		);
 		const ircEnabled = isIrcEnabled(this.session.settings, this.session.taskDepth ?? 0);
@@ -778,7 +780,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 						ircEnabled,
 						willRunAsync: false,
 						scoutAvailable: isScoutSpawnable(
-							cfgTaskDisabledAgents.get(this.session.settings) as string[] | undefined,
+							cfgTaskDisabledAgents.get(this.session.settings),
 							this.session.getSessionSpawns?.() ?? "*",
 						),
 					});
@@ -815,7 +817,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 					ircEnabled,
 					willRunAsync: asyncItems.length > 0,
 					scoutAvailable: isScoutSpawnable(
-						cfgTaskDisabledAgents.get(this.session.settings) as string[] | undefined,
+						cfgTaskDisabledAgents.get(this.session.settings),
 						this.session.getSessionSpawns?.() ?? "*",
 					),
 				});
@@ -1505,6 +1507,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 				...(Object.hasOwn(params, "schemaMode") ? { schemaMode: params.schemaMode } : {}),
 				...(params.effort !== undefined ? { effort: params.effort } : {}),
 				...(Object.hasOwn(params, "model") ? { model: params.model } : {}),
+				complexity: params.complexity,
 				...(params.tools?.length
 					? {
 							customTools: createEvalCustomTools(

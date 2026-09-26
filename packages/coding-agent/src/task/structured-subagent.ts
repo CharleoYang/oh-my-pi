@@ -109,6 +109,8 @@ export interface StructuredSubagentRequest {
 	schemaMode?: StructuredSubagentSchemaMode;
 	/** Per-spawn thinking effort mapped onto the resolved model's supported range; overrides the agent's default selector. */
 	effort?: TaskEffort;
+	/** Caller's terse difficulty rationale; steers the child's `auto` thinking classification. */
+	complexity?: string;
 	identity?: StructuredSubagentIdentity;
 	index?: number;
 	parentToolCallId?: string;
@@ -253,7 +255,7 @@ function assertPlanControlsAllowed(request: StructuredSubagentRequest, planMode:
 
 function assertDepthAndSpawnAllowed(request: StructuredSubagentRequest, agentName: string): void {
 	const taskDepth = request.session.taskDepth ?? 0;
-	const maxDepth = cfgTaskMaxRecursionDepth.get(request.session.settings) ?? 2;
+	const maxDepth = cfgTaskMaxRecursionDepth.get(request.session.settings);
 	if (!canSpawnAtDepth(maxDepth, taskDepth)) {
 		throw new StructuredSubagentError(
 			"preflight",
@@ -298,7 +300,7 @@ export async function resolveEffectiveSubagentPolicy(
 		const available = agents.map(candidate => candidate.name).join(", ") || "none";
 		throw new StructuredSubagentError("preflight", `Unknown agent "${agentName}". Available: ${available}`);
 	}
-	const disabledAgents = cfgTaskDisabledAgents.get(request.session.settings) as string[];
+	const disabledAgents = cfgTaskDisabledAgents.get(request.session.settings);
 	if (disabledAgents.includes(agentName)) {
 		const enabled = agents
 			.filter(candidate => !disabledAgents.includes(candidate.name))
@@ -500,6 +502,7 @@ function buildExecutorOptions(
 		parentActiveModelPattern: policy.parentActiveModelPattern,
 		thinkingLevel: policy.effectiveAgent.thinkingLevel,
 		effort: request.effort,
+		complexity: request.complexity?.trim() || undefined,
 		...(policy.schema.source === "none"
 			? {}
 			: {

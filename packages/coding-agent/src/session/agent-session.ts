@@ -78,9 +78,10 @@ import type {
 	UsageReport,
 	UserMessage,
 } from "@oh-my-pi/pi-ai";
-import { type Effort, streamSimple } from "@oh-my-pi/pi-ai";
+import { type Effort, serviceTierFamily, streamSimple } from "@oh-my-pi/pi-ai";
 import * as AIError from "@oh-my-pi/pi-ai/error";
 import { resetOpenAICodexHistoryAfterCompaction } from "@oh-my-pi/pi-ai/providers/openai-codex-responses";
+import { withCredentialRedaction } from "@oh-my-pi/pi-ai/providers/transform-messages";
 import { toolWireSchema } from "@oh-my-pi/pi-ai/utils/schema";
 import { supportsOutputTokenLimit } from "@oh-my-pi/pi-catalog/compat/output-limits";
 import { requiresNativeTools, requiresToolFreeHistoryForToolOptOut } from "@oh-my-pi/pi-catalog/compat/tools";
@@ -117,7 +118,7 @@ import {
 	resolveCliModel,
 } from "../config/model-resolver";
 import { expandPromptTemplate, type PromptTemplate } from "../config/prompt-templates";
-import { buildServiceTierByFamily, serviceTierSettingToTier } from "../config/service-tier";
+import { buildServiceTierByFamily, isServiceTierForFamily, serviceTierSettingToTier } from "../config/service-tier";
 import { combine, type SettingsScope } from "../config/registry";
 import type { Settings } from "../config/settings";
 import { RawSseDebugBuffer } from "@oh-my-pi/pi-tui/apps/debug/raw-sse-buffer";
@@ -152,7 +153,7 @@ import type {
 	TurnEndEvent,
 	TurnStartEvent,
 } from "../extensibility/extensions";
-import { emitSessionShutdownEvent } from "../extensibility/extensions";
+import { emitSessionShutdownEvent, TOP_LEVEL_AGENT } from "../extensibility/extensions";
 import { ManagedTimers } from "../extensibility/extensions/managed-timers";
 import { createExtensionModelQuery } from "../extensibility/extensions/model-api";
 import type { CompactOptions, ContextUsage } from "../extensibility/extensions/types";
@@ -181,6 +182,7 @@ import { loadOverallPlanReference } from "../plan-mode/plan-handoff";
 import type { PlanModeState } from "../plan-mode/state";
 import goalModeContextPrompt from "../prompts/goals/goal-mode-context.md" with { type: "text" };
 import goalTodoContextPrompt from "../prompts/goals/goal-todo-context.md" with { type: "text" };
+import anthropicUsageWrapUpPrompt from "../prompts/system/anthropic-usage-wrap-up.md" with { type: "text" };
 import autoContinuePrompt from "../prompts/system/auto-continue.md" with { type: "text" };
 import checkpointActiveNoticeTemplate from "../prompts/system/checkpoint-active-notice.md" with { type: "text" };
 import imageAttachmentPrompt from "../prompts/system/image-attachment.md" with { type: "text" };
@@ -201,6 +203,7 @@ import {
 	obfuscateProviderContext,
 } from "../secrets/message-transform";
 import type { SecretObfuscator } from "../secrets/obfuscator";
+import { cfgSecretsEnabled } from "../secrets/settings";
 import { releaseSharpshooterSession } from "../sharpshooter/backend";
 import { flushSharpshooterExtraction } from "../sharpshooter/extract";
 import { toolReadsSkillUris } from "../system-prompt";
@@ -226,7 +229,6 @@ import {
 } from "../tools/browser/tab-supervisor";
 import type { CheckpointState, CompletedRewindState } from "../tools/checkpoint";
 import { releaseComputerSessionsForOwner } from "../tools/computer/supervisor";
-import { normalizeLocalScheme } from "../internal-urls/parse";
 import { isAutoQaEnabled } from "../tools/report-tool-issue";
 import {
 	buildResolveReminderMessage,
@@ -284,9 +286,11 @@ import type {
 } from "./agent-session-types";
 import { writeArtifact } from "./artifacts";
 import { formatArtifactErrorNotice, type OutputMeta, stripOutputNotice } from "@oh-my-pi/pi-tui/tools/output-meta";
+import { truncateMiddle } from "@oh-my-pi/pi-tui/tools/streaming-output";
 import {
 	ASYNC_INLINE_RESULT_MAX_CHARS,
 	ASYNC_PREVIEW_MAX_CHARS,
+	ASYNC_PREVIEW_TAIL_CHARS,
 	ASYNC_RESULT_MESSAGE_TYPE,
 	type AsyncResultEntry,
 	buildAsyncResultBatchMessage,
@@ -438,7 +442,9 @@ import {
 	cfgTierAnthropic,
 	cfgTierGoogle,
 	cfgTierOpenai,
+	cfgProvidersAnthropicSlowMode,
 } from "./settings";
+import { type AnthropicSlowModeController, anthropicSlowModeLanes } from "./anthropic-slow-mode";
 import { cfgInterruptMode } from "../modes/settings";
 import { cfgFollowUpMode } from "../modes/settings";
 import { cfgSteeringMode } from "../modes/settings";
@@ -857,6 +863,10 @@ export class AgentSession implements SettingsScope {
 	#usagePreflightReadyModel: Model | undefined;
 	#detachUsageBeforeQueueDequeue: (() => void) | undefined;
 	#detachUsageBeforeModelCall: (() => void) | undefined;
+	/** Claude account lane (`cred:<id>`/`key:<hash>`) that served the latest Anthropic request. */
+	#anthropicSlowModeLane: string | undefined;
+	/** `<lane>#<window>` of the wrap-up window this session already told the model about. */
+	#anthropicWrapUpHinted: string | undefined;
 
 	#transformContext: (messages: AgentMessage[], signal?: AbortSignal) => AgentMessage[] | Promise<AgentMessage[]>;
 	#onPayload: SimpleStreamOptions["onPayload"] | undefined;
@@ -1399,7 +1409,7 @@ export class AgentSession implements SettingsScope {
 			(() => ({
 				explicit: config.additionalExtensionPaths ?? [],
 				mode: config.disableExtensionDiscovery ? "explicit-only" : "merge",
-				configured: cfgExtensions.get(this.settings) ?? [],
+				configured: cfgExtensions.get(this.settings),
 				configuredLevel: this.settings.extensionsSourceLevel(),
 			}));
 		this.#preparedExtensions = config.preparedExtensions;
@@ -1673,6 +1683,7 @@ export class AgentSession implements SettingsScope {
 			}
 			this.#loopGuards.recordTurn(messages, context);
 			await this.#prewalk.advanceAtTurnEnd(messages, context);
+			if (context?.willContinue) this.#steerAnthropicWrapUp();
 			await this.#advisors.onPrimaryTurnEnd(messages, context?.willContinue, signal);
 			await this.#maintenance.maintainContextMidRun(messages, signal, context);
 		});
@@ -1775,6 +1786,7 @@ export class AgentSession implements SettingsScope {
 			emitNotice: (level, message, source) => this.emitNotice(level, message, source),
 			notifyCommandMetadataChanged: () => this.#notifyCommandMetadataChanged(),
 			localProtocolOptions: () => this.#localProtocolOptions(),
+			evalPreludes: () => this.getEvalPreludes(),
 		};
 		this.#tools = new SessionTools(sessionToolsHost, {
 			autoApprove: config.autoApprove,
@@ -2165,8 +2177,11 @@ export class AgentSession implements SettingsScope {
 	}
 
 	/**
-	 * `browser.enabled` / `computer.enabled` change the eval preludes the system prompt advertises;
-	 * the browser toggle also re-filters its MCP tools first. A failed browser switch-on reverts to off.
+	 * `browser.enabled` / `computer.enabled` change the live eval preludes; the browser toggle also
+	 * re-filters its MCP tools first. An empty transcript rebuilds the system prompt to advertise
+	 * them; mid-session the cached prompt stays byte-stable and the next user prompt carries a
+	 * hidden prelude notice instead (see {@link SessionTools.takeEvalPreludeNotice}).
+	 * A failed browser switch-on reverts to off.
 	 */
 	async #reconcileEvalPreludeSetting(path: "browser.enabled" | "computer.enabled", enabled: boolean): Promise<void> {
 		try {
@@ -2174,7 +2189,7 @@ export class AgentSession implements SettingsScope {
 				const tools = await this.#reconcileBrowserMcpFilter(enabled);
 				await this.refreshMCPTools(tools);
 			}
-			await this.refreshBaseSystemPrompt();
+			if (this.agent.state.messages.length === 0) await this.refreshBaseSystemPrompt();
 		} catch (error) {
 			if (path === "browser.enabled" && enabled && cfgBrowserEnabled.get(this.settings)) {
 				cfgBrowserEnabled.override(this.settings, false);
@@ -2223,19 +2238,17 @@ export class AgentSession implements SettingsScope {
 	}
 
 	/**
-	 * Applies session-level settings (queue modes, thinking, sampling, service
-	 * tiers, advisors, think tool, skillful) to the live session whenever they
-	 * change. Setters that persist route back here idempotently.
+	 * Applies session-level settings (queue modes, sampling, service tiers,
+	 * advisors, think tool, skillful) to the live session whenever they change.
+	 * Setters that persist route back here idempotently. `defaultThinkingLevel`
+	 * is deliberately absent: it seeds new sessions, and a later write (config
+	 * reload, another process, a parent session) must not override a running
+	 * session's selection — the settings panel and `cfg://` apply it explicitly.
 	 */
 	#watchSessionSettings(): void {
 		cfgSteeringMode.listen(this, mode => this.agent.setSteeringMode(mode));
 		cfgFollowUpMode.listen(this, mode => this.agent.setFollowUpMode(mode));
 		cfgInterruptMode.listen(this, mode => this.agent.setInterruptMode(mode));
-		cfgDefaultThinkingLevel.listen(this, configured => {
-			const level = parseConfiguredThinkingLevel(configured);
-			if (level === undefined || level === this.configuredThinkingLevel()) return;
-			this.setThinkingLevel(level);
-		});
 		cfgSampling.listen(this, sampling => {
 			this.agent.temperature = sampling.temperature;
 			this.agent.topP = sampling.topP;
@@ -2717,6 +2730,18 @@ export class AgentSession implements SettingsScope {
 		const body = meta?.artifactError ? stripOutputNotice(result, meta).trimEnd() : result;
 		const preview = `${body.slice(0, ASYNC_PREVIEW_MAX_CHARS)}\n\n[Output truncated. Showing first ${ASYNC_PREVIEW_MAX_CHARS.toLocaleString()} characters.]`;
 		if (meta?.artifactError) return `${preview}\n[${formatArtifactErrorNotice(meta.artifactError)}]`;
+		// The producing tool's output sink already mirrored the raw stream to an
+		// artifact; `result` is its elided inline body, so link the raw capture.
+		// The capture lacks notices the tool appended after the stream (exit code,
+		// wall time, timeout), so the preview keeps `result`'s tail as well.
+		const rawArtifactId = meta?.truncation?.artifactId ?? meta?.limits?.columnTruncated?.artifactId;
+		if (rawArtifactId) {
+			const headTail = truncateMiddle(result, {
+				maxBytes: ASYNC_PREVIEW_MAX_CHARS,
+				maxHeadBytes: ASYNC_PREVIEW_MAX_CHARS - ASYNC_PREVIEW_TAIL_CHARS,
+			}).content;
+			return `${headTail}\nFull output: artifact://${rawArtifactId}`;
+		}
 		try {
 			const { path: artifactPath, id: artifactId } = await this.sessionManager.allocateArtifactPath("async");
 			if (artifactPath && artifactId) {
@@ -4424,7 +4449,7 @@ export class AgentSession implements SettingsScope {
 		// call never reaches extensions. Deny is mode-independent (tool decision
 		// or user policy), so resolving under the most permissive mode is exact;
 		// the wrapper still enforces the mode-accurate gate before execution.
-		const userPolicies = (cfgToolsApproval.get(this.settings) ?? {}) as Record<string, unknown>;
+		const userPolicies: Record<string, unknown> = cfgToolsApproval.get(this.settings);
 		const approvalArgs = computer ? { actions: computer.actions } : ctx.args;
 		if (resolveApproval(ctx.tool, approvalArgs, "yolo", userPolicies).policy === "deny") {
 			return undefined;
@@ -4936,8 +4961,10 @@ export class AgentSession implements SettingsScope {
 
 	/**
 	 * Synchronously mark the session as disposing so new work is rejected
-	 * immediately: eval starts throw, queued asides are dropped, and the
-	 * aside provider is detached. Idempotent; `dispose()` runs it first.
+	 * immediately: eval starts throw, queued asides are dropped, the aside
+	 * provider is detached, and settings listeners bound to the session stop
+	 * (a config reload mid-teardown must not reconnect or re-steer anything).
+	 * Idempotent; `dispose()` runs it first.
 	 *
 	 * Wrappers that await other teardown before delegating to `dispose()` MUST
 	 * call this before their first await — otherwise work started in that async
@@ -4945,6 +4972,7 @@ export class AgentSession implements SettingsScope {
 	 */
 	beginDispose(): void {
 		this.#isDisposed = true;
+		for (const dispose of this.#disposers.splice(0)) dispose();
 		this.#modelDiscoveryAbortController.abort();
 		this.#queuedMessageDrainBlocked = false;
 		this.#usagePreflightReadyForNextModelCall = false;
@@ -5178,6 +5206,7 @@ export class AgentSession implements SettingsScope {
 		this.setHindsightSessionState(undefined);
 		hindsightState?.dispose();
 		this.#disconnectFromAgent();
+		// beginDispose() drained the rest; this catches registrations made during teardown.
 		for (const dispose of this.#disposers.splice(0)) dispose();
 		this.#eventListeners = [];
 		this.#runStateListeners.clear();
@@ -5841,6 +5870,11 @@ export class AgentSession implements SettingsScope {
 		return this.#getEvalPreludes?.() ?? [];
 	}
 
+	/** Eval preludes frozen into the provider-visible prompt (see {@link SessionTools.advertisedEvalPreludes}). */
+	getAdvertisedEvalPreludes(): readonly EvalPreludeDefinition[] {
+		return this.#tools.advertisedEvalPreludes;
+	}
+
 	/** Cancels the local rollout-memory startup owned by this session. */
 	cancelLocalMemoryStartup(): void {
 		this.#memory.cancelLocalMemoryStartup();
@@ -5860,6 +5894,11 @@ export class AgentSession implements SettingsScope {
 	applyMemoryBackend(options: { retainMnemopi?: boolean } = {}): Promise<void> {
 		if (!this.memoryEnabled) return Promise.resolve();
 		return this.#memory.applyMemoryBackend(options);
+	}
+
+	/** Resolves once every memory-setting edit so far, and the backend transitions it started, has settled. */
+	settleMemoryBackend(): Promise<void> {
+		return this.#memory.settle();
 	}
 
 	/** Rebuilds the stable base prompt, optionally discarding a stale asynchronous rebuild. */
@@ -6387,8 +6426,7 @@ export class AgentSession implements SettingsScope {
 	}
 
 	#isScoutAvailable(): boolean {
-		const disabledAgents = cfgTaskDisabledAgents.get(this.settings) as string[] | undefined;
-		return this.#scoutAllowedBySpawnPolicy && !disabledAgents?.includes("scout");
+		return this.#scoutAllowedBySpawnPolicy && !cfgTaskDisabledAgents.get(this.settings).includes("scout");
 	}
 
 	async #buildPlanModeMessage(): Promise<CustomMessage | null> {
@@ -6399,8 +6437,7 @@ export class AgentSession implements SettingsScope {
 		const resolvedPlanPath = resolvePlanFilePath(state.planFilePath, planPathOptions);
 		const resolvedSessionPlan = resolvePlanFilePath(sessionPlanUrl, planPathOptions);
 		const displayPlanPath =
-			InternalUrlRouter.instance().canHandle(normalizeLocalScheme(state.planFilePath)) ||
-			resolvedPlanPath !== resolvedSessionPlan
+			InternalUrlRouter.instance().canHandle(state.planFilePath) || resolvedPlanPath !== resolvedSessionPlan
 				? state.planFilePath
 				: sessionPlanUrl;
 
@@ -7085,7 +7122,7 @@ export class AgentSession implements SettingsScope {
 	async #promptWithMessage(
 		message: AgentMessage,
 		expandedText: string,
-		options?: Pick<PromptOptions, "toolChoice" | "images" | "skipCompactionCheck"> & {
+		options?: Pick<PromptOptions, "toolChoice" | "images" | "skipCompactionCheck" | "complexity"> & {
 			prependMessages?: AgentMessage[];
 			skipPostPromptRecoveryWait?: boolean;
 			acceptTerminalEmptyStop?: boolean;
@@ -7222,7 +7259,7 @@ export class AgentSession implements SettingsScope {
 			// back to a concrete level inside the helper.
 			const isUserTurn = message.role === "user" || (message.role === "custom" && isUserInvokedSkillPrompt(message));
 			if (this.isAutoThinking && isUserTurn) {
-				await this.#models.applyAutoThinkingLevel(expandedText, generation);
+				await this.#models.applyAutoThinkingLevel(expandedText, generation, options?.complexity);
 				if (this.#promptGeneration !== generation) {
 					return false;
 				}
@@ -7261,12 +7298,14 @@ export class AgentSession implements SettingsScope {
 			const toolRosterNotice = isUserQueuedMessage(message)
 				? this.#tools.takePendingToolRosterNotice({ baseDelivered: baseXdevCatalogDelivered })
 				: undefined;
-			if (xdevMountNotice || toolRosterNotice) {
+			const evalPreludeNotice = isUserQueuedMessage(message) ? this.#tools.takeEvalPreludeNotice() : undefined;
+			if (xdevMountNotice || toolRosterNotice || evalPreludeNotice) {
 				messages.splice(
 					xdevMountNoticeIndex,
 					0,
 					...(xdevMountNotice ? [xdevMountNotice] : []),
 					...(toolRosterNotice ? [toolRosterNotice] : []),
+					...(evalPreludeNotice ? [evalPreludeNotice] : []),
 				);
 			}
 
@@ -7357,6 +7396,9 @@ export class AgentSession implements SettingsScope {
 			sessionManager: this.sessionManager,
 			modelRegistry: this.#modelRegistry,
 			isProjectTrusted: () => true,
+			// Used only when the session has no extension runner. `createAgentSession` always builds
+			// one (carrying the real identity), so only hand-constructed sessions land here.
+			agent: TOP_LEVEL_AGENT,
 
 			model: this.model ?? undefined,
 			models: createExtensionModelQuery(this.#modelRegistry, this.settings, () => this.model ?? undefined),
@@ -8498,16 +8540,20 @@ export class AgentSession implements SettingsScope {
 			? AbortSignal.any([signal, this.#titleGenerationAbortController.signal])
 			: this.#titleGenerationAbortController.signal;
 		if (titleSignal.aborted) return null;
-		const title = await generateSessionTitle(
-			firstMessage,
-			this.#modelRegistry,
-			this.settings,
-			sessionId,
-			this.model,
-			provider => buildSessionMetadata(sessionId, provider, this.#modelRegistry.authStorage),
-			customSystemPrompt ?? this.#titleSystemPrompt,
-			titleSignal,
-			parentSessionId,
+		// The title request carries user text, so it follows this session's own credential
+		// redaction policy like its conversation requests (see `settingsAwareStreamFn`).
+		const title = await withCredentialRedaction(cfgSecretsEnabled.get(this.settings), () =>
+			generateSessionTitle(
+				firstMessage,
+				this.#modelRegistry,
+				this.settings,
+				sessionId,
+				this.model,
+				provider => buildSessionMetadata(sessionId, provider, this.#modelRegistry.authStorage),
+				customSystemPrompt ?? this.#titleSystemPrompt,
+				titleSignal,
+				parentSessionId,
+			),
 		);
 		if (await this.#sessionGenerationChanged(sessionGeneration)) return null;
 		return !titleSignal.aborted && this.sessionId === parentSessionId ? title : null;
@@ -8961,6 +9007,59 @@ export class AgentSession implements SettingsScope {
 		return this.#models.isFastModeActive();
 	}
 
+	/** Record the Claude account lane that served this session's latest Anthropic request. */
+	noteAnthropicSlowModeLane(lane: string): void {
+		this.#anthropicSlowModeLane = lane;
+	}
+
+	/**
+	 * Slow-mode lane of the Claude account this session last used, or
+	 * undefined before its first Anthropic subscription request.
+	 */
+	getAnthropicSlowModeLane(): AnthropicSlowModeController | undefined {
+		const lane = this.#anthropicSlowModeLane;
+		return lane === undefined ? undefined : anthropicSlowModeLanes.lane(lane);
+	}
+
+	/**
+	 * Status-line label for the Claude account's usage-limit stage, e.g.
+	 * `limit reached · wrapping up · resets 14:30` or (with `/slow on`)
+	 * `low priority until 14:30 · 62% left`; undefined outside both stages or
+	 * off an Anthropic model.
+	 */
+	getAnthropicSlowModeLabel(): string | undefined {
+		if (this.model?.provider !== "anthropic") return undefined;
+		return this.getAnthropicSlowModeLane()?.statusLabel(
+			undefined,
+			cfgProvidersAnthropicSlowMode.get(this.settings) === "auto",
+		);
+	}
+
+	/**
+	 * Mid-run, once per wrap-up window: tell the model to checkpoint when its
+	 * Claude account runs on the wrap-up allowance and nothing (low priority,
+	 * extra usage) will carry the work past it.
+	 */
+	#steerAnthropicWrapUp(): void {
+		const lane = this.#anthropicSlowModeLane;
+		if (lane === undefined || this.model?.provider !== "anthropic") return;
+		const window = anthropicSlowModeLanes
+			.lane(lane)
+			.wrapUpHintKey(cfgProvidersAnthropicSlowMode.get(this.settings) === "auto");
+		if (window === undefined) return;
+		const key = `${lane}#${window}`;
+		if (this.#anthropicWrapUpHinted === key) return;
+		this.#anthropicWrapUpHinted = key;
+		this.agent.steer({
+			role: "custom",
+			customType: "anthropic-usage-wrap-up",
+			content: anthropicUsageWrapUpPrompt,
+			attribution: "agent",
+			display: false,
+			timestamp: Date.now(),
+		});
+	}
+
 	/** Sets or clears one model family's live service tier. */
 	setServiceTierFamily(family: ServiceTierFamily, tier: ServiceTier | undefined): void {
 		this.#models.setServiceTierFamily(family, tier);
@@ -8974,6 +9073,50 @@ export class AgentSession implements SettingsScope {
 	/** Toggles priority service for the active model family. */
 	toggleFastMode(): boolean {
 		return this.#models.toggleFastMode();
+	}
+
+	/**
+	 * What `/slow` controls for the active model: the `flex` service tier on the
+	 * OpenAI/Google families, or subscription slow mode on direct Anthropic.
+	 */
+	#slowModeTarget(): { kind: "flex"; family: ServiceTierFamily } | { kind: "anthropic" } | undefined {
+		const model = this.model;
+		if (!model) return undefined;
+		if (model.provider === "anthropic") return { kind: "anthropic" };
+		const family = serviceTierFamily(model);
+		return family && isServiceTierForFamily(family, "flex") ? { kind: "flex", family } : undefined;
+	}
+
+	/** Reports whether `/slow` is on for the active model. */
+	isSlowModeEnabled(): boolean {
+		const target = this.#slowModeTarget();
+		if (!target) return false;
+		if (target.kind === "anthropic") return cfgProvidersAnthropicSlowMode.get(this.settings) === "auto";
+		return this.serviceTierByFamily[target.family] === "flex";
+	}
+
+	/**
+	 * `/slow on|off` for the active model. OpenAI/Google: sets or clears this
+	 * session's `flex` tier. Anthropic: sets `providers.anthropic.slowMode` to
+	 * `auto`/`off`; on also enters an already-offered (or user-stopped) slow
+	 * window right away, off stops the active one. Returns false when the model
+	 * has no slow mode.
+	 */
+	setSlowMode(enabled: boolean): boolean {
+		const target = this.#slowModeTarget();
+		if (!target) return false;
+		if (target.kind === "flex") {
+			if (enabled) this.setServiceTierFamily(target.family, "flex");
+			else if (this.serviceTierByFamily[target.family] === "flex") {
+				this.setServiceTierFamily(target.family, undefined);
+			}
+			return true;
+		}
+		cfgProvidersAnthropicSlowMode.set(this.settings, enabled ? "auto" : "off");
+		const lane = this.getAnthropicSlowModeLane();
+		if (enabled) lane?.accept();
+		else lane?.stop("user");
+		return true;
 	}
 
 	/** Flips the `skillful` setting for this session only. See {@link setSkillful}. */
@@ -9420,7 +9563,7 @@ export class AgentSession implements SettingsScope {
 	 * manager as needed. Called on model switch AND setting change.
 	 */
 	#syncAppendOnlyContext(model: Model | null | undefined): void {
-		const setting = cfgProviderAppendOnlyContext.get(this.settings) ?? "auto";
+		const setting = cfgProviderAppendOnlyContext.get(this.settings);
 		const enable = shouldEnableAppendOnlyContext(setting, model);
 		const providerId = model?.provider;
 		const prev = this.#lastAppendOnlyResolution;
@@ -11500,8 +11643,8 @@ export class AgentSession implements SettingsScope {
 			palette: useUserThemes ? "theme" : "web",
 			themeNames: useUserThemes
 				? {
-						dark: cfgThemeDark.get(this.settings) ?? "titanium",
-						light: cfgThemeLight.get(this.settings) ?? "light",
+						dark: cfgThemeDark.get(this.settings),
+						light: cfgThemeLight.get(this.settings),
 					}
 				: undefined,
 		});

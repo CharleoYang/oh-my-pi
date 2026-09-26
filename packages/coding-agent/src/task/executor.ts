@@ -27,6 +27,7 @@ import {
 import type { PromptTemplate } from "../config/prompt-templates";
 import {
 	buildServiceTierByFamily,
+	isServiceTierForFamily,
 	resolveAgentServiceTierOverride,
 	resolveSubagentServiceTier,
 	type ServiceTierInheritSettingValue,
@@ -122,6 +123,7 @@ import {
 	cfgTierAnthropic,
 	cfgTierOpenai,
 	cfgRetryFallbackChains,
+	cfgDefaultThinkingLevel,
 } from "../session/settings";
 import { cfgModelRoles, cfgDisabledProviders } from "../config/model-settings";
 import { cfgCompactionThresholdPercent, cfgCompactionThresholdTokens } from "../session/context-settings";
@@ -466,6 +468,8 @@ export interface ExecutorOptions {
 	thinkingLevel?: ConfiguredThinkingLevel;
 	/** Caller-requested coarse effort (`lo`/`med`/`hi`); maps onto the resolved model's supported thinking range and wins over {@link thinkingLevel}. */
 	effort?: TaskEffort;
+	/** Caller's terse difficulty rationale; rides the initial prompt into the child's `auto` thinking classifier. */
+	complexity?: string;
 	/** Schema used to validate the final structured completion. */
 	outputSchema?: unknown;
 	/** Enforcement policy for {@link outputSchema}; defaults to legacy permissive behavior. */
@@ -987,17 +991,28 @@ export function createMCPProxyTools(mcpManager: MCPManager): CustomTool[] {
 	});
 }
 
+/**
+ * Per-family tiers a subagent inherits: the parent's live tiers when a live session supplied
+ * them, else its configured `tier.*`. Live entries a family can't realize (a resumed session
+ * file may carry `{anthropic: "flex"}`) are dropped — the subagent overlay rejects them.
+ */
 function inheritedSubagentServiceTiers(
 	baseSettings: Settings,
 	inheritedServiceTier?: ServiceTierByFamily | null,
 ): ServiceTierByFamily {
-	return inheritedServiceTier === undefined
-		? buildServiceTierByFamily(
-				cfgTierOpenai.get(baseSettings),
-				cfgTierAnthropic.get(baseSettings),
-				cfgTierGoogle.get(baseSettings),
-			)
-		: (inheritedServiceTier ?? {});
+	if (inheritedServiceTier === undefined) {
+		return buildServiceTierByFamily(
+			cfgTierOpenai.get(baseSettings),
+			cfgTierAnthropic.get(baseSettings),
+			cfgTierGoogle.get(baseSettings),
+		);
+	}
+	const tiers: ServiceTierByFamily = {};
+	for (const family of ["openai", "anthropic", "google"] as const) {
+		const tier = inheritedServiceTier?.[family];
+		if (isServiceTierForFamily(family, tier)) tiers[family] = tier;
+	}
+	return tiers;
 }
 
 /**
@@ -1008,8 +1023,10 @@ function inheritedSubagentServiceTiers(
  */
 const kRootCompactionThresholds = Symbol("task.rootCompactionThresholds");
 
-/** Settings, tagged with the root's compaction thresholds when created by {@link createSubagentSettings}. */
-type SubagentChainSettings = Settings & { [kRootCompactionThresholds]?: CompactionThresholdPair };
+/** Settings from {@link createSubagentSettings}, tagged with its chain's root compaction thresholds. */
+interface SubagentChainSettings extends Settings {
+	[kRootCompactionThresholds]?: CompactionThresholdPair;
+}
 
 /** Settings overrides applying an exact-name compaction threshold entry to one subagent. */
 export function compactionThresholdSettings(
@@ -1044,6 +1061,9 @@ export function createSubagentSettings(
 	// Every other setting reads through to the parent live; writes on the overlay stay local.
 	const subagentSettings: SubagentChainSettings = baseSettings.overlay({
 		...compactionThresholdSettings(inheritedRootThresholds),
+		// A subagent's thinking level is chosen at spawn (agent definition, `effort`, or this
+		// snapshot of the parent default); a later parent default edit must not re-steer it.
+		defaultThinkingLevel: cfgDefaultThinkingLevel.get(baseSettings),
 		"tier.openai": subagentTiers.openai ?? "none",
 		"tier.anthropic": subagentTiers.anthropic ?? "none",
 		"tier.google": subagentTiers.google ?? "none",
@@ -2143,11 +2163,18 @@ async function driveSessionToYield(
 	session: AgentSession,
 	monitor: SubagentRunMonitor,
 	task: string,
-	// Invoked when the initial prompt loses a prompt race (AgentBusyError) before
-	// retrying. Lets the caller restore a safe contract and detach its monitor
-	// while backing off. Absent, the busy error keeps the old path.
-	onPromptBusy?: () => Promise<void>,
+	options: {
+		/** Difficulty rationale forwarded to the session's `auto` thinking classifier. */
+		complexity?: string;
+		/**
+		 * Invoked when the initial prompt loses a prompt race (AgentBusyError) before
+		 * retrying. Lets the caller restore a safe contract and detach its monitor
+		 * while backing off. Absent, the busy error keeps the old path.
+		 */
+		onPromptBusy?: () => Promise<void>;
+	} = {},
 ): Promise<DriveOutcome> {
+	const { complexity, onPromptBusy } = options;
 	using _keepalive = new EventLoopKeepalive();
 	const abortSignal = monitor.abortSignal;
 	let exitCode = 0;
@@ -2191,7 +2218,7 @@ async function driveSessionToYield(
 			let promptAttempts = 0;
 			for (;;) {
 				try {
-					await awaitAbortable(session.prompt(task, { attribution: "agent" }));
+					await awaitAbortable(session.prompt(task, { attribution: "agent", complexity }));
 					break;
 				} catch (error) {
 					promptAttempts++;
@@ -3306,18 +3333,20 @@ export async function runSubagentFollowUpTurn(options: FollowUpTurnOptions): Pro
 	// then reinstall and reattach for the retry.
 	let attemptUnsubscribe = monitor.attach(session);
 	try {
-		outcome = await driveSessionToYield(session, monitor, message, async () => {
-			attemptUnsubscribe();
-			logger.debug("Subagent follow-up lost the prompt race to an IRC wake; backing off", { id });
-			await session.setWorkPoolYieldItems([]);
-			if (signal) {
-				await untilAborted(signal, () => session.waitForIdle());
-			} else {
-				await session.waitForIdle();
-			}
-			resetYieldTurnState(session.getToolByName("yield"));
-			await session.setWorkPoolYieldItems(options.workPoolYieldItems ?? []);
-			attemptUnsubscribe = monitor.attach(session);
+		outcome = await driveSessionToYield(session, monitor, message, {
+			onPromptBusy: async () => {
+				attemptUnsubscribe();
+				logger.debug("Subagent follow-up lost the prompt race to an IRC wake; backing off", { id });
+				await session.setWorkPoolYieldItems([]);
+				if (signal) {
+					await untilAborted(signal, () => session.waitForIdle());
+				} else {
+					await session.waitForIdle();
+				}
+				resetYieldTurnState(session.getToolByName("yield"));
+				await session.setWorkPoolYieldItems(options.workPoolYieldItems ?? []);
+				attemptUnsubscribe = monitor.attach(session);
+			},
 		});
 		if (monitor.yieldCalled()) {
 			// A follow-up turn's accepted yield is the run's final result too:
@@ -3441,20 +3470,14 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 		},
 		options.parentServiceTier,
 	);
-	const maxRecursionDepth = cfgTaskMaxRecursionDepth.get(settings) ?? 2;
-	const maxRuntimeMs = Math.max(
-		0,
-		Math.trunc(Number(options.maxRuntimeMs ?? cfgTaskMaxRuntimeMs.get(settings) ?? 0) || 0),
-	);
+	const maxRecursionDepth = cfgTaskMaxRecursionDepth.get(settings);
+	const maxRuntimeMs = Math.max(0, Math.trunc(Number(options.maxRuntimeMs ?? cfgTaskMaxRuntimeMs.get(settings)) || 0));
 	// TTL before an adopted idle subagent is parked by the lifecycle manager.
 	// <= 0 disables parking (the session stays live until process teardown).
-	const agentIdleTtlMs = Math.trunc(Number(cfgTaskAgentIdleTtlMs.get(settings) ?? 420_000) || 0);
-	const configuredDefaultBudget = Math.max(
-		0,
-		Math.trunc(Number(cfgTaskSoftRequestBudget.get(settings) ?? SOFT_REQUEST_BUDGET.default) || 0),
-	);
+	const agentIdleTtlMs = Math.trunc(Number(cfgTaskAgentIdleTtlMs.get(settings)) || 0);
+	const configuredDefaultBudget = Math.max(0, Math.trunc(Number(cfgTaskSoftRequestBudget.get(settings)) || 0));
 	const softRequestBudget = resolveSoftRequestBudget(agent.name, configuredDefaultBudget);
-	const softRequestBudgetNotice = cfgTaskSoftRequestBudgetNotice.get(settings) ?? false;
+	const softRequestBudgetNotice = cfgTaskSoftRequestBudgetNotice.get(settings);
 	const parentDepth = options.taskDepth ?? 0;
 	const childDepth = parentDepth + 1;
 	const atMaxDepth = maxRecursionDepth >= 0 && childDepth >= maxRecursionDepth;
@@ -3478,6 +3501,18 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 		if (backends.python || backends.js) expanded.push("eval");
 		expanded.push("bash");
 		toolNames = Array.from(new Set(expanded));
+	}
+	// Agents that can start background work (`task`, `bash`) need `wait` to block on it;
+	// without it they `sleep`. Runs after `exec` expansion and the max-depth `task` strip.
+	// `createTools` still drops it when no wake source (async/IRC/services) is enabled.
+	// Restricted sessions own their explicit list and are never widened.
+	if (
+		toolNames &&
+		!options.restrictToolNames &&
+		!toolNames.includes("wait") &&
+		(toolNames.includes("task") || toolNames.includes("bash"))
+	) {
+		toolNames = [...toolNames, "wait"];
 	}
 	// Inbound steering works without messaging; outbound peer coordination requires write.
 	const ircEnabled =
@@ -4169,7 +4204,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 			}
 
 			readyAt = performance.now();
-			const outcome = await driveSessionToYield(session, monitor, task);
+			const outcome = await driveSessionToYield(session, monitor, task, { complexity: options.complexity });
 			// Acceptance boundary (#11079): the run's final result is settled, so
 			// stamp the lifecycle and terminalize a ref the run-state mirror left
 			// `running` before the (possibly slow) cleanup below.

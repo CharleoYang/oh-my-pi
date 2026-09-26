@@ -214,6 +214,8 @@ export interface ToolSession {
 	hasUI: boolean;
 	/** Whether `ask` can reach a human. Defaults to `hasUI`. */
 	canPromptUser?: boolean;
+	/** The user approves `cfg://` writes for this session (top-level TUI session only). */
+	settingsApproval?: boolean;
 	/** Whether this session has begun disposal. */
 	isDisposed?: () => boolean;
 	/**
@@ -334,6 +336,12 @@ export interface ToolSession {
 	getEvalKernelOwnerId?: () => string | null;
 	/** Current enabled eval prelude definitions. */
 	getEvalPreludes?: () => readonly EvalPreludeDefinition[];
+	/**
+	 * Eval preludes frozen into the system prompt and eval description at the
+	 * last base rebuild. Mid-session toggles ride a hidden notice instead of
+	 * rewriting the provider cache prefix.
+	 */
+	getAdvertisedEvalPreludes?: () => readonly EvalPreludeDefinition[];
 	/** Reject new eval work once session disposal has started. */
 	assertEvalExecutionAllowed?: () => void;
 	/** Track tool-owned eval work so session disposal can await/abort it like direct session eval runs. */
@@ -693,7 +701,7 @@ export async function resolveBuiltinToolPlan(session: ToolSession, toolNames?: s
 		) {
 			requestedTools.push("ast_edit");
 		}
-		if (["hindsight", "mnemopi"].includes(cfgMemoryBackend.get(session.settings) ?? "")) {
+		if (["hindsight", "mnemopi"].includes(cfgMemoryBackend.get(session.settings))) {
 			for (const name of ["recall", "retain", "reflect"]) {
 				if (!requestedTools.includes(name)) requestedTools.push(name);
 			}
@@ -713,7 +721,7 @@ export async function resolveBuiltinToolPlan(session: ToolSession, toolNames?: s
 		if (cfgAutolearnEnabled.get(session.settings) && (session.taskDepth ?? 0) === 0) {
 			if (!requestedTools.includes("manage_skill")) requestedTools.push("manage_skill");
 			if (
-				["hindsight", "mnemopi", "local"].includes(cfgMemoryBackend.get(session.settings) ?? "") &&
+				["hindsight", "mnemopi", "local"].includes(cfgMemoryBackend.get(session.settings)) &&
 				!requestedTools.includes("learn")
 			) {
 				requestedTools.push("learn");
@@ -755,10 +763,7 @@ export async function resolveBuiltinToolPlan(session: ToolSession, toolNames?: s
 				cfgCheckpointEnabled.get(session.settings) &&
 				((session.taskDepth ?? 0) === 0 || requestedTools !== undefined)
 			);
-		// Subagents never block on `wait`: owned job results re-wake their run
-		// through the executor's quiescence barrier, and parent messages steer them.
 		if (name === "wait") {
-			if ((session.taskDepth ?? 0) > 0) return false;
 			return (
 				cfgAsyncEnabled.get(session.settings) ||
 				(session.enableIrc !== false && isIrcEnabled(session.settings, session.taskDepth ?? 0)) ||
@@ -766,7 +771,7 @@ export async function resolveBuiltinToolPlan(session: ToolSession, toolNames?: s
 			);
 		}
 		if (name === "retain" || name === "recall" || name === "reflect") {
-			return ["hindsight", "mnemopi"].includes(cfgMemoryBackend.get(session.settings) ?? "");
+			return ["hindsight", "mnemopi"].includes(cfgMemoryBackend.get(session.settings));
 		}
 		if (name === "memory_edit") return cfgMemoryBackend.get(session.settings) === "mnemopi";
 		if (name === "manage_skill")
@@ -778,11 +783,11 @@ export async function resolveBuiltinToolPlan(session: ToolSession, toolNames?: s
 			return (
 				cfgAutolearnEnabled.get(session.settings) &&
 				((session.taskDepth ?? 0) === 0 || requestedTools !== undefined) &&
-				["hindsight", "mnemopi", "local"].includes(cfgMemoryBackend.get(session.settings) ?? "")
+				["hindsight", "mnemopi", "local"].includes(cfgMemoryBackend.get(session.settings))
 			);
 		}
 		if (name === "task") {
-			return canSpawnAtDepth(cfgTaskMaxRecursionDepth.get(session.settings) ?? 2, session.taskDepth ?? 0);
+			return canSpawnAtDepth(cfgTaskMaxRecursionDepth.get(session.settings), session.taskDepth ?? 0);
 		}
 		return true;
 	};
