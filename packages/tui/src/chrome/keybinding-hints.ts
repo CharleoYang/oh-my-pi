@@ -41,8 +41,8 @@ export function interruptKey(): string {
 }
 
 /** Primary key bound to an app action (see {@link editorKey}); all keys: `getDisplayString`. */
-export function appKey(keybindings: KeybindingsManager, action: AppKeybinding): string {
-	const [key] = keybindings.getKeys(action);
+export function appKey(keybindings: KeybindingsManager | undefined, action: AppKeybinding): string {
+	const [key] = keybindings?.getKeys(action) ?? [];
 	return key ? formatKeyHint(key) : "";
 }
 
