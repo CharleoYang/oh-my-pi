@@ -21,8 +21,12 @@ provider "azure" {
 	}
 	// Azure Chat Completions rejects Astra reasoning whenever function tools are
 	// present; the documented escape hatch is an explicit `none` effort.
+	// The Astra reasoning endpoint (both the Azure and Codex transports) rejects
+	// the wire `none` tier outright — supported efforts are low..max — so a
+	// disabled reasoning request must floor to the lowest effort (low) instead
+	// of `none`, matching gpt-6-sol/luna.
 	models "gpt-6-astra*" {
 		disable-reasoning-with-tools #true
-		reasoning-disable-mode "none-effort"
+		reasoning-disable-mode "lowest-effort"
 	}
 }

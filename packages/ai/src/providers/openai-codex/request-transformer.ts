@@ -1,5 +1,5 @@
 import { Effort } from "@oh-my-pi/pi-catalog/effort";
-import { requireSupportedEffort } from "@oh-my-pi/pi-catalog/model-thinking";
+import { getSupportedEfforts, requireSupportedEffort } from "@oh-my-pi/pi-catalog/model-thinking";
 import { $env } from "@oh-my-pi/pi-utils";
 import type { Model } from "../../types";
 import { mapOpenAIReasoningEffort } from "../openai-shared";
@@ -168,6 +168,25 @@ function getReasoningConfig(
 		config.summary = options.reasoningSummary ?? "auto";
 	}
 	return config;
+}
+
+/**
+ * Wire effort to send when native reasoning is disabled (`options.reasoningOff`).
+ * Models whose endpoint rejects the `none` tier (gpt-6-astra: supported efforts
+ * are low..max) must floor to the lowest supported effort; `none-effort` models
+ * (gpt-5.6-sol/terra, gpt-6-sol/luna) keep the bare `none`.
+ */
+function disabledReasoningEffort(
+	model: Model<"openai-codex-responses">,
+	options: CodexRequestOptions,
+): Partial<ReasoningConfig> {
+	if (model.compat.reasoningDisableMode === "lowest-effort" && model.compat.supportsReasoningEffort) {
+		const minEffort = getSupportedEfforts(model)[0];
+		if (minEffort !== undefined) {
+			return { effort: mapOpenAIReasoningEffort(model, model.compat, minEffort) as ReasoningConfig["effort"] };
+		}
+	}
+	return { effort: "none" };
 }
 function filterInput(input: InputItem[] | undefined): InputItem[] | undefined {
 	if (!Array.isArray(input)) return input;
@@ -488,7 +507,7 @@ export async function transformRequestBody(
 
 	if (options.reasoningOff || options.reasoningEffort !== undefined || responsesLite) {
 		const reasoningConfig: Partial<ReasoningConfig> = options.reasoningOff
-			? { effort: "none" }
+			? disabledReasoningEffort(model, options)
 			: options.reasoningEffort !== undefined
 				? getReasoningConfig(model, options.reasoningEffort, options)
 				: {};
