@@ -764,6 +764,8 @@ export async function resolveBuiltinToolPlan(session: ToolSession, toolNames?: s
 				((session.taskDepth ?? 0) === 0 || requestedTools !== undefined)
 			);
 		if (name === "wait") {
+			// Subagents never block on `wait`: owned job results re-wake their run.
+			if ((session.taskDepth ?? 0) > 0) return false;
 			return (
 				cfgAsyncEnabled.get(session.settings) ||
 				(session.enableIrc !== false && isIrcEnabled(session.settings, session.taskDepth ?? 0)) ||
