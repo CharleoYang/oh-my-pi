@@ -3,6 +3,8 @@ import { CommandController } from "@oh-my-pi/pi-coding-agent/modes/controllers/c
 import { getThemeByName, setThemeInstance } from "@oh-my-pi/pi-tui/theme";
 import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
 
+const keybindings = { getKeys: () => ["escape"] };
+
 function createContainer() {
 	return {
 		children: [] as unknown[],
@@ -60,6 +62,7 @@ describe("/handoff command", () => {
 			},
 			loadingAnimation: undefined,
 			statusContainer,
+			keybindings,
 			chatContainer,
 			ui: { requestRender, requestComponentRender: vi.fn() },
 			editor: { onEscape: originalOnEscape },
@@ -71,7 +74,6 @@ describe("/handoff command", () => {
 			showStatus: vi.fn(),
 			showWarning: vi.fn(),
 			showError: vi.fn(),
-			keybindings: { getKeys: () => ["escape"] },
 		} as unknown as InteractiveModeContext;
 		const controller = new CommandController(ctx);
 
@@ -110,6 +112,7 @@ describe("/handoff command", () => {
 				loadingAnimation = value;
 			},
 			statusContainer,
+			keybindings,
 			ui: { requestRender: vi.fn(), requestComponentRender: vi.fn() },
 			clearTransientSessionUi: vi.fn(() => {
 				loadingAnimation?.stop();
@@ -128,7 +131,6 @@ describe("/handoff command", () => {
 			showStatus: vi.fn(),
 			showWarning: vi.fn(),
 			showError: vi.fn(),
-			keybindings: { getKeys: () => ["escape"] },
 		} as unknown as InteractiveModeContext;
 		const controller = new CommandController(ctx);
 
@@ -163,6 +165,7 @@ describe("/handoff command", () => {
 				loadingAnimation = value;
 			},
 			statusContainer,
+			keybindings,
 			ui: { requestRender: vi.fn(), requestComponentRender: vi.fn() },
 			clearTransientSessionUi: vi.fn(() => {
 				loadingAnimation?.stop();
@@ -188,7 +191,6 @@ describe("/handoff command", () => {
 			showStatus: vi.fn(),
 			showWarning: vi.fn(),
 			showError: vi.fn(),
-			keybindings: { getKeys: () => ["escape"] },
 		} as unknown as InteractiveModeContext;
 		const controller = new CommandController(ctx);
 
@@ -228,6 +230,7 @@ describe("/handoff command", () => {
 				activeRetryLoader = value;
 			},
 			statusContainer,
+			keybindings,
 			ui: { requestRender: vi.fn(), requestComponentRender: vi.fn() },
 			clearTransientSessionUi: vi.fn(() => {
 				statusContainer.disposeChildren();
@@ -245,7 +248,6 @@ describe("/handoff command", () => {
 			showStatus: vi.fn(),
 			showWarning: vi.fn(),
 			showError: vi.fn(),
-			keybindings: { getKeys: () => ["escape"] },
 		} as unknown as InteractiveModeContext;
 		const controller = new CommandController(ctx);
 
@@ -277,13 +279,13 @@ describe("/handoff command", () => {
 			},
 			loadingAnimation: undefined,
 			statusContainer,
+			keybindings,
 			chatContainer: createContainer(),
 			ui: { requestRender: vi.fn(), requestComponentRender: vi.fn() },
 			editor: { onEscape: vi.fn() },
 			showError,
 			showStatus: vi.fn(),
 			showWarning: vi.fn(),
-			keybindings: { getKeys: () => ["escape"] },
 		} as unknown as InteractiveModeContext;
 		const controller = new CommandController(ctx);
 
@@ -307,10 +309,10 @@ describe("/handoff command", () => {
 			session: { isStreaming: true, handoff },
 			loadingAnimation: undefined,
 			statusContainer,
+			keybindings,
 			ui: { requestRender: vi.fn(), requestComponentRender: vi.fn() },
 			showWarning,
 			showError: vi.fn(),
-			keybindings: { getKeys: () => ["escape"] },
 			showStatus: vi.fn(),
 		} as unknown as InteractiveModeContext;
 		const controller = new CommandController(ctx);
@@ -339,10 +341,10 @@ describe("/handoff command", () => {
 			autoCompactionLoader,
 			retryLoader: undefined,
 			statusContainer,
+			keybindings,
 			ui: { requestRender: vi.fn(), requestComponentRender: vi.fn() },
 			showWarning,
 			showError: vi.fn(),
-			keybindings: { getKeys: () => ["escape"] },
 			showStatus: vi.fn(),
 		} as unknown as InteractiveModeContext;
 		const controller = new CommandController(ctx);

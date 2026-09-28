@@ -416,9 +416,9 @@ export declare class TextPredictor {
 /**
  * Dedicated writer thread for one terminal fd.
  *
- * Constructed by the TUI's `ProcessTerminal` around stdout. The fd is
- * `dup(2)`'d at construction and closed on drop, so later manipulation of the
- * original descriptor does not affect the pump.
+ * `dup(2)`'d at construction and closed on drop. The duplicate keeps the
+ * pump's fd alive if the original is closed or replaced; file-status flags
+ * such as `O_NONBLOCK` are shared and handled by polling for `POLLOUT`.
  */
 export declare class TtyWriter {
   /**
@@ -680,24 +680,13 @@ export declare class VcsRepo {
 export declare function __ompInstallTokioRuntime(): void
 
 /**
- * Version sentinel — exists solely so the JS loader can prove at load time
- * that the `.node` file on disk is from the same package release as the
- * `index.js` ESM wrapper invoking it.
+ * Release version stamped into this `.node` after linking.
  *
- * The `js_name` is bumped by `scripts/release.ts` to match the new
- * `Cargo.toml` / `package.json` version on every release. The JS loader
- * computes the expected name from `package.json#version` and refuses to use
- * a `.node` that doesn't expose it, turning the silent
- * `<sym> is not a function` crash from a locked-file update (the canonical
- * Windows `bun install -g` failure mode) into a clear load-time error.
- *
- * Bump policy: `__piNativesV{major}_{minor}_{patch}` — non-alphanumerics in
- * the version string are mapped to `_` to keep it a valid JS identifier.
- * MUST stay in sync with `VERSION_SENTINEL_EXPORT` in
- * `packages/natives/native/index.js` (which derives the name from
- * `package.json#version`).
+ * `None` for an unstamped build. The JS loader compares it against
+ * `package.json#version` so a `.node` from another release fails at load time
+ * with an actionable error instead of a later `<sym> is not a function` crash.
  */
-export declare function __piNativesV18_3_2(): void
+export declare function __piNativesBuildVersion(): string | null
 
 /**
  * Reports whether the on-device model can generate, as an `availability`
@@ -1578,6 +1567,9 @@ export declare function execReplace(argv: Array<string>): void
  */
 export declare function executeShell(options: ShellExecuteOptions, onChunk?: ((error: Error | null, chunk: string) => void) | undefined | null): Promise<ShellRunResult>
 
+/** Expand Windows 8.3 components without resolving symlinks or junctions. */
+export declare function expandWindowsLongPath(path: string): string
+
 /** Locate `*** Edit File: path` payloads the model emitted as plain text. */
 export declare function extractInlineSloppyRegions(text: string): Array<InlineSloppyRegion>
 
@@ -1654,6 +1646,9 @@ export interface FuzzyFindResult {
 
 /** Get list of supported languages. */
 export declare function getSupportedLanguages(): Array<string>
+
+/** Get the existing Windows 8.3 spelling; preserve the input when unavailable. */
+export declare function getWindowsShortPath(path: string): string
 
 /**
  * Get work profile data from the last N seconds.
@@ -1744,7 +1739,8 @@ export interface GlobResult {
  *
  * # Arguments
  * - `options`: Pattern, path, filters, and output mode.
- * - `on_match`: Optional callback invoked per match/result.
+ * - `on_match`: Optional callback invoked per returned match/result, after the
+ *   search (never called when `options.onMatches` streams instead).
  *
  * # Returns
  * Aggregated results across matching files.
@@ -1821,6 +1817,17 @@ export interface GrepOptions {
    * absent).
    */
   filesystem?: ShellFilesystem
+  /**
+   * Stream results instead of returning them: called on the JS thread with
+   * batches (at most 1024 entries, files in no particular order) of what
+   * `matches` would hold, while the search runs. A slow callback pauses the
+   * search instead of buffering. Successful completion waits for every
+   * callback and carries counts with empty `matches`; cancellation also
+   * interrupts delivery waits, though already queued callbacks may still run.
+   * A throw rejects the search with it. Incompatible with `maxCount` and
+   * `offset`.
+   */
+  onMatches?: (matches: GrepMatch[]) => void
 }
 
 /** Output mode for [`search`] and [`grep`] (string values match JS callers). */
@@ -3141,7 +3148,21 @@ export interface SpellingRange {
  */
 export declare function structuredPatchHunks(oldText: string, newText: string, context?: number | undefined | null): Array<PatchHunk>
 
+/**
+ * Summarize source structure synchronously on the calling thread.
+ *
+ * Prefer [`summarize_code_async`] on hot paths: the tree-sitter parse blocks
+ * the JS thread for the whole call.
+ */
 export declare function summarizeCode(options: SummaryOptions): SummaryResult
+
+/**
+ * Summarize source structure on libuv's thread pool.
+ *
+ * Same result as [`summarize_code`], but the parse and summary run off the
+ * JS thread; only argument and result marshalling happen on it.
+ */
+export declare function summarizeCodeAsync(options: SummaryOptions): Promise<SummaryResult>
 
 export interface SummaryOptions {
   /** Source code to summarize. */

@@ -28,6 +28,7 @@ import {
 	clearRenderCache,
 	getComposerStyle,
 	getPaddingX,
+	getWidthConfigEpoch,
 	Loader,
 	Markdown,
 	Spacer,
@@ -36,7 +37,6 @@ import {
 	TERMINAL,
 	Text,
 	type TUI,
-	renderProgressBar,
 	visibleWidth,
 	wrapTextWithAnsi,
 } from "@oh-my-pi/pi-tui";
@@ -100,6 +100,8 @@ import {
 	JUDGMENT_BATCH_PROGRESS_EVENT_CHANNEL,
 	type JudgmentBatchProgress,
 } from "../eval/judgment-batch-events";
+import { onDownloadActivity } from "../downloads/activity";
+import { DownloadActivityHud, JudgmentBatchProgressHud } from "./progress-hud";
 import { autosaveApprovedPlan, planSaveFileName } from "../plan-mode/plan-autosave";
 import { resolvePlanModelTransition } from "../plan-mode/model-transition";
 import guidedGoalInterviewPrompt from "../prompts/goals/guided-goal-interview.md" with { type: "text" };
@@ -107,7 +109,6 @@ import planFilenamePrompt from "../prompts/system/plan-filename.md" with { type:
 import planModeApprovedPrompt from "../prompts/system/plan-mode-approved.md" with { type: "text" };
 import planModeCompactInstructionsPrompt from "../prompts/system/plan-mode-compact-instructions.md" with { type: "text" };
 import type { AgentHubRegistry } from "@oh-my-pi/pi-tui/overlays/agent-hub-types";
-import { formatCost } from "@oh-my-pi/pi-tui/overlays/agent-hub-renderer";
 import { AgentRegistry, MAIN_AGENT_ID } from "../registry/agent-registry";
 import {
 	type AgentSession,
@@ -124,7 +125,7 @@ import { setWordPredictionHost } from "@oh-my-pi/pi-tui/prompt/word-completion";
 import { USER_INTERRUPT_LABEL } from "../session/messages";
 import { resolveMarkdownLinkTargets } from "../internal-urls/hyperlink-targets";
 import { modelMentionDisplayName } from "@oh-my-pi/pi-tui/prompt/model-mention-syntax";
-import { modelMentionChipLabel } from "@oh-my-pi/pi-tui/prompt/composer-attachments";
+import { modelMentionChipLabel, shiftImageMarkers } from "@oh-my-pi/pi-tui/prompt/composer-attachments";
 import type { SessionContext } from "../session/session-context";
 import { getRecentSessions } from "../session/session-listing";
 import type { SessionManager } from "../session/session-manager";
@@ -228,12 +229,12 @@ import type { LspServerInfo as WelcomeLspServerInfo } from "@oh-my-pi/pi-tui/pro
 import {
 	Composer,
 	type ComposerPreferences,
-	type ComposerStatusSnapshot,
+	type ComposerStatusCache,
 	PINNED_HUD_TOGGLE_ID,
 } from "@oh-my-pi/pi-tui/prompt/composer";
 import { setMagicKeywords } from "@oh-my-pi/pi-tui/prompt/magic-keywords";
 import { MAGIC_KEYWORDS } from "./magic-keywords";
-import { writeComposerStatusCache, writeComposerWelcomeCache } from "@oh-my-pi/pi-tui/prompt/composer-cache";
+import { sharedComposerCache } from "@oh-my-pi/pi-tui/prompt/composer-cache";
 import { BtwController } from "./controllers/btw-controller";
 import { CleanseCommandController } from "./controllers/cleanse-command-controller";
 import { CommandController } from "./controllers/command-controller";
@@ -425,8 +426,6 @@ type LiveUiSettings = SettingValueOf<typeof cfgLiveUiSettings>;
 
 const STILL_CLOSING_DELAY_MS = 3_000;
 const JUDGMENT_BATCH_PROGRESS_RETAIN_MS = 1_000;
-const JUDGMENT_BATCH_PROGRESS_BAR_WIDTH = 18;
-const JUDGMENT_BATCH_PROGRESS_MIN_BAR_WIDTH = 4;
 const DEFAULT_WORKING_MESSAGE = "Working…";
 
 interface WorkingMessageAccent {
@@ -630,83 +629,6 @@ class StatusHudContainer extends AnchoredLiveContainer {
 	}
 }
 
-/** Editor-anchored, right-aligned progress rows for concurrent judge batches. */
-class JudgmentBatchProgressHud implements Component {
-	readonly #batches = new Map<string, JudgmentBatchProgress>();
-
-	update(progress: JudgmentBatchProgress): void {
-		this.#batches.set(progress.id, progress);
-	}
-
-	delete(id: string): void {
-		this.#batches.delete(id);
-	}
-
-	clear(): void {
-		this.#batches.clear();
-	}
-
-	render(width: number): readonly string[] {
-		const rowWidth = Number.isFinite(width) ? Math.max(0, Math.trunc(width)) : 0;
-		if (rowWidth === 0) return [];
-		const rows: string[] = [];
-		for (const progress of this.#batches.values()) rows.push(this.#renderRow(progress, rowWidth));
-		return rows;
-	}
-
-	#renderRow(progress: JudgmentBatchProgress, width: number): string {
-		const countText = `${progress.done}/${progress.total}`;
-		// Zero cost means unpriced (local/native without catalog pricing), not free — omit rather than show $0.
-		const costText = progress.cost > 0 ? ` · ${formatCost(progress.cost)}` : "";
-		const failedText = progress.failed > 0 ? ` · ${progress.failed} failed` : "";
-		const compactFailedText = progress.failed > 0 ? ` +${progress.failed}!` : "";
-		let failure = failedText;
-		if (
-			failure &&
-			visibleWidth(countText) +
-				visibleWidth(costText) +
-				visibleWidth(failure) +
-				JUDGMENT_BATCH_PROGRESS_MIN_BAR_WIDTH +
-				1 >
-				width &&
-			visibleWidth(countText) + visibleWidth(costText) + visibleWidth(compactFailedText) <= width
-		) {
-			failure = compactFailedText;
-		}
-
-		const styledCount = theme.bold(theme.fg("text", countText));
-		const styledCost = costText ? theme.fg("dim", costText) : "";
-		const styledFailure = failure ? theme.fg("warning", failure) : "";
-		let tail = `${styledCount}${styledCost}${styledFailure}`;
-		let remaining = width - visibleWidth(tail);
-		if (remaining > 1) {
-			const barWidth = Math.min(JUDGMENT_BATCH_PROGRESS_BAR_WIDTH, remaining - 1);
-			const bar = renderProgressBar(progress.done, barWidth, {
-				min: 0,
-				max: Math.max(1, progress.total),
-				minWidth: barWidth,
-				maxWidth: barWidth,
-				style: {
-					filled: "━",
-					empty: "─",
-					styleFilled: text => theme.fg("accent", text),
-					styleEmpty: text => theme.fg("dim", text),
-				},
-			});
-			tail = `${bar} ${tail}`;
-			remaining = width - visibleWidth(tail);
-		}
-
-		const intent = sanitizeStatusText(progress.intent);
-		if (remaining > 1) {
-			const label = truncateToWidth(intent, remaining - 1, "");
-			if (label) tail = `${theme.fg("dim", label)} ${tail}`;
-		}
-		if (visibleWidth(tail) > width) tail = theme.bold(theme.fg("text", truncateToWidth(countText, width, "")));
-		return `${" ".repeat(Math.max(0, width - visibleWidth(tail)))}${tail}`;
-	}
-}
-
 /**
  * Preview of the command panels queued while the agent streams, rendered above
  * the editor so `/usage` and friends answer immediately mid-turn.
@@ -760,16 +682,19 @@ function isHudSubagent(session: ObservableSession): boolean {
  * sentinel, which the click router handles before any registry lookup.
  * Rendering delegates to the same `Text` mount as before, so output bytes are
  * unchanged — only the row map is new. Long rows wrap inside `Text` (content
- * is two cells narrower than the terminal), so the map is rebuilt per render
- * from measured wrapped heights: continuation rows belong to the agent (or
- * toggle) whose logical row started them.
+ * is two cells narrower than the terminal), so the map is built on the first
+ * click after rendering at a new width or width configuration: continuation
+ * rows belong to the agent (or toggle) whose logical row started them.
  */
 export class SubagentHudComponent implements Component {
 	readonly #text: Text;
 	readonly #lines: readonly string[];
 	readonly #order: readonly string[];
 	readonly #toggleLine: number | undefined;
-	#physicalOwner: (string | undefined)[] = [];
+	#physicalOwner?: (string | undefined)[];
+	#renderedWidth?: number;
+	#renderedRows = 0;
+	#renderedWidthConfigEpoch?: number;
 	constructor(lines: readonly string[], order: readonly string[], toggleRow?: number) {
 		this.#text = new Text(lines.join("\n"), 1, 0);
 		this.#lines = lines;
@@ -778,11 +703,26 @@ export class SubagentHudComponent implements Component {
 	}
 	render(width: number): readonly string[] {
 		const rows = this.#text.render(width);
-		this.#rebuildHitMap(width, rows.length);
+		const widthConfigEpoch = getWidthConfigEpoch();
+		if (
+			this.#renderedWidth !== width ||
+			this.#renderedRows !== rows.length ||
+			this.#renderedWidthConfigEpoch !== widthConfigEpoch
+		) {
+			this.#physicalOwner = undefined;
+		}
+		this.#renderedWidth = width;
+		this.#renderedRows = rows.length;
+		this.#renderedWidthConfigEpoch = widthConfigEpoch;
 		return rows;
 	}
 	getClickAgentAtRow(row: number): string | undefined {
-		return row >= 0 && row < this.#physicalOwner.length ? this.#physicalOwner[row] : undefined;
+		if (row < 0 || row >= this.#renderedRows || this.#renderedWidth === undefined) return undefined;
+		if (!this.#physicalOwner) {
+			if (this.#renderedWidthConfigEpoch !== getWidthConfigEpoch()) return undefined;
+			this.#rebuildHitMap(this.#renderedWidth, this.#renderedRows);
+		}
+		return this.#physicalOwner?.[row];
 	}
 	// Native wrap splits paragraphs independently, so per-line wrapped
 	// heights compose exactly to the rendered row count. A length mismatch
@@ -960,7 +900,8 @@ export class InteractiveMode implements InteractiveModeContext {
 	ui: TUI;
 	chatContainer: TranscriptContainer;
 	pendingMessagesContainer: Container;
-	judgmentBatchProgressContainer: Container;
+	/** Judge-batch and automatic-download progress rows above the working line. */
+	progressHudContainer: Container;
 	statusContainer: Container;
 	/** Whether {@link statusContainer} rendered lines in the latest frame; the band composer's editor top gap collapses only then. */
 	statusRowOccupied = false;
@@ -1021,6 +962,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	#todoAutoClearGeneration = 0;
 	#modelCycleClearTimer: NodeJS.Timeout | undefined;
 	readonly #judgmentBatchProgressHud = new JudgmentBatchProgressHud();
+	readonly #downloadActivityHud = new DownloadActivityHud(() => this.ui.requestRender());
 	readonly #judgmentBatchProgressClearTimers = new Map<string, NodeJS.Timeout>();
 	#nextAppearanceRequestToken = 1;
 	#appearanceRefreshRequest: { token: TerminalAppearanceRequestToken; deadline: number } | undefined;
@@ -1286,24 +1228,6 @@ export class InteractiveMode implements InteractiveModeContext {
 	invalidatePendingFocus(): void {
 		this.#focusController.invalidatePendingFocus();
 	}
-	/**
-	 * Whether inline mouse capture is opted in. Never throws: the render hot
-	 * path reads this every frame, including in suites (or teardown races)
-	 * where the global singleton is uninitialized or the session carries it
-	 * dead — both fall back to off.
-	 */
-	#isMouseCaptureEnabled(): boolean {
-		try {
-			if (cfgTuiMouse.get(settings) === true) return true;
-		} catch {
-			// Global singleton unavailable; try the mode's own settings below.
-		}
-		try {
-			return cfgTuiMouse.get(this.settings) === true;
-		} catch {
-			return false;
-		}
-	}
 
 	resolveViewportClickCandidates(index: number): string[] {
 		return this.composer.viewportClickCandidates(index);
@@ -1371,6 +1295,8 @@ export class InteractiveMode implements InteractiveModeContext {
 	#eventBus?: EventBus;
 	#subagentEventBus?: EventBus;
 	#eventBusUnsubscribers: Array<() => void> = [];
+	/** Mirror of `tui.mouse`, read by the TUI's per-frame inline mouse tracking probe. */
+	#mouseCapture = false;
 	#observerUiSyncTimer?: NodeJS.Timeout;
 	#observerUiSyncNeedsTodoReconcile = false;
 	#runningSubagentCount = 0;
@@ -1418,11 +1344,7 @@ export class InteractiveMode implements InteractiveModeContext {
 					version,
 					modelName: session.model?.name ?? "Unknown",
 					providerName: session.model?.provider ?? "Unknown",
-					lspServers: lspServers?.map(server => ({
-						name: server.name,
-						status: server.status,
-						fileTypes: server.fileTypes,
-					})),
+					lspServers: this.#getWelcomeLspServers(lspServers),
 				},
 			});
 		this.composer.setPreferences(preferences);
@@ -1476,24 +1398,31 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#applyTextSizingSetting();
 		// Keep generic pi-tui renderers aligned with the coding-agent setting.
 		applyHyperlinkSetting();
-		this.ui.setInlineMouseTrackingProvider(() => {
-			const on = this.#isMouseCaptureEnabled();
-			// Dropping capture must also drop the band: with reporting off no
-			// motion event will ever arrive to clear a mid-hover highlight.
-			// The controller cache goes too, or a re-enable plus motion over
-			// the same card would look unchanged and skip restoring the band.
-			if (!on) {
-				this.composer.setHoveredClickId(undefined);
-				// The provider can fire from a synchronous forced render before
-				// init reaches the controller block below.
-				this.#inputController?.clearHoverHighlight();
-			}
-			return on;
-		});
+		// The TUI polls the provider every frame, so it reads a field kept in sync by
+		// subscription rather than resolving the setting per render.
+		// Session settings overlay the global layer and forward its changes.
+		this.#mouseCapture = cfgTuiMouse.get(this.settings);
+		this.#eventBusUnsubscribers.push(
+			cfgTuiMouse.listen(this.settings, on => {
+				this.#mouseCapture = on;
+				// Dropping capture must also drop the band: with reporting off no
+				// motion event will ever arrive to clear a mid-hover highlight.
+				// The controller cache goes too, or a re-enable plus motion over
+				// the same card would look unchanged and skip restoring the band.
+				if (!on) {
+					this.composer.setHoveredClickId(undefined);
+					this.#inputController?.clearHoverHighlight();
+				}
+				this.ui.requestRender();
+			}),
+		);
+		this.ui.setInlineMouseTrackingProvider(() => this.#mouseCapture);
 		this.chatContainer = new TranscriptContainer();
 		this.pendingMessagesContainer = new AnchoredLiveContainer();
-		this.judgmentBatchProgressContainer = new AnchoredLiveContainer();
-		this.judgmentBatchProgressContainer.addChild(this.#judgmentBatchProgressHud);
+		this.progressHudContainer = new AnchoredLiveContainer();
+		this.progressHudContainer.addChild(this.#judgmentBatchProgressHud);
+		this.progressHudContainer.addChild(this.#downloadActivityHud);
+		this.#eventBusUnsubscribers.push(onDownloadActivity(activity => this.#downloadActivityHud.update(activity)));
 		this.statusContainer = new StatusHudContainer(this);
 		this.todoContainer = new TodoHudContainer(this);
 		this.subagentContainer = new AnchoredLiveContainer();
@@ -1589,7 +1518,6 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#focusController = new SessionFocusController(this);
 		this.#inputController = new InputController(this);
 		this.collabController = new CollabController(this);
-		this.session.setTitleGenerationStart?.(() => this.#inputController.notifyTitleGenerationStart());
 		this.session.setPromptDropped?.(prompt => this.#restoreDroppedPrompt(prompt));
 		this.#observerRegistry = new SessionObserverRegistry();
 	}
@@ -1773,7 +1701,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		if (!startupQuiet && this.#startupChangelog && cfgStartupChangelogMode.get(settings) !== "hidden") {
 			headerAfter.push(
 				new DynamicBorder(),
-				new Text(theme.bold(theme.fg("accent", "What's New")), 1, 0),
+				new Text("What's New", 1, 0).setStyleFn(t => theme.bold(theme.fg("accent", t))),
 				new Spacer(1),
 			);
 			if (cfgStartupChangelogMode.get(settings) === "summary") {
@@ -1789,10 +1717,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		}
 		this.#headerAfter = headerAfter;
 		this.composer.setHeaderExtras(headerBefore, headerAfter);
-		this.statusLine.watchBranch(() => {
-			this.#persistComposerStatus();
-			this.ui.requestRender();
-		});
+		this.statusLine.watchBranch(() => this.ui.requestRender());
 		this.composer.setStatusComponent(this.statusLine);
 
 		this.composer.setRuntimeChildren(
@@ -1807,9 +1732,9 @@ export class InteractiveMode implements InteractiveModeContext {
 				this.errorBannerContainer,
 				this.modelCycleContainer,
 				this.deferredCommandContainer,
-				// Judge batches stay editor-anchored and update independently of eval
-				// transcript output, directly above the working/throughput/title row.
-				this.judgmentBatchProgressContainer,
+				// Judge batches and automatic downloads stay editor-anchored and update
+				// independently of transcript output, directly above the working/throughput/title row.
+				this.progressHudContainer,
 				// Working loader / transient status sits below the sticky todo + subagent
 				// HUDs, just above the editor's hook-widget top margin — so it reads next to
 				// the prompt while keeping the one-line gap above the editor (the band
@@ -2409,6 +2334,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		if (this.planModeEnabled || this.planModePaused) return;
 		if (!this.goalModeEnabled || this.goalModePaused) return;
 		if (this.#goalSuppressNextContinuation) return;
+		if (this.#goalOpenWorkAllBlocked()) return;
 		if (this.#pendingSubmittedInput) return;
 		if (this.editor.getText().trim().length > 0) return;
 		if ((this.editor.pendingImages?.length ?? 0) > 0) return;
@@ -2433,6 +2359,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			if ((this.editor.pendingImages?.length ?? 0) > 0) return;
 			const latestState = this.session.getGoalModeState();
 			if (!latestState?.enabled || latestState.goal.status !== "active") return;
+			if (this.#goalOpenWorkAllBlocked()) return;
 			this.#pendingGoalContinuationTurns++;
 			this.onInputCallback(
 				this.startPendingSubmission({
@@ -2442,6 +2369,18 @@ export class InteractiveMode implements InteractiveModeContext {
 				}),
 			);
 		}, 800);
+	}
+
+	/** A blocked-only todo list has no work the agent can advance without another turn. */
+	#goalOpenWorkAllBlocked(): boolean {
+		const phases = this.session.getTodoPhases();
+		if (nextActionableTask(phases)) return false;
+		for (const phase of phases) {
+			for (const task of phase.tasks) {
+				if (task.status === "blocked") return true;
+			}
+		}
+		return false;
 	}
 
 	#cancelGoalContinuation(): void {
@@ -2807,7 +2746,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			display?: boolean;
 			streamingBehavior?: "steer" | "followUp";
 		},
-		options?: { preserveDraft?: boolean },
+		options?: { preserveDraft?: boolean; clearEditor?: boolean },
 	): SubmittedUserInput {
 		const submission: SubmittedUserInput = {
 			text: input.text,
@@ -2847,7 +2786,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		} else {
 			this.clearOptimisticUserMessage();
 		}
-		if (!options?.preserveDraft) {
+		if (!options?.preserveDraft && options?.clearEditor !== false) {
 			this.editor.setText("");
 			this.editor.imageLinks = undefined;
 		}
@@ -2876,11 +2815,22 @@ export class InteractiveMode implements InteractiveModeContext {
 			this.#stopLoadingAnimation(true);
 		}
 		if (!submission.customType && !preserveDraft) {
-			this.editor.pendingImages = submission.images ? [...submission.images] : [];
-			this.editor.pendingImageLinks = submission.imageLinks ? [...submission.imageLinks] : [];
+			// Enter clears the submitted draft before this cancellation can run.
+			// Keep anything typed or attached since then, after the recovered input.
+			const laterText = this.editor.getExpandedText();
+			const submittedImages = submission.images ?? [];
+			const laterImages = this.editor.pendingImages;
+			const recoveredText = laterText
+				? `${submission.text}\n${shiftImageMarkers(laterText, submittedImages.length)}`
+				: submission.text;
+			this.editor.pendingImages = [...submittedImages, ...laterImages];
+			this.editor.pendingImageLinks = [
+				...(submission.imageLinks ?? submittedImages.map(() => undefined)),
+				...this.editor.pendingImageLinks,
+			];
 			this.editor.imageLinks = this.editor.pendingImageLinks;
 			this.rebuildChatFromMessages();
-			this.editor.setText(submission.text);
+			this.editor.setCollapsedText(recoveredText);
 		}
 		this.updateEditorBorderColor();
 		this.ui.requestRender();
@@ -3141,63 +3091,24 @@ export class InteractiveMode implements InteractiveModeContext {
 		const shape = cfgComposerShape.get(settings);
 		const style = getComposerStyle(shape);
 		this.composer.setPreferences({ composerShape: shape });
-		this.statusLine.setAutocompleteActiveProbe(() => this.editor.isAutocompleteActive());
-		switch (style.statusAttachment) {
-			case "top-border":
-				this.editor.setTopBorderProvider(availableWidth => this.statusLine.getTopBorder(availableWidth));
-				break;
-			case "top-band":
-				this.editor.setTopBorderProvider(availableWidth => this.statusLine.getBandTopBorder(availableWidth));
-				break;
-			case "top-rule-chip":
-				this.editor.setTopBorderProvider(availableWidth => this.statusLine.getStandaloneTopBorder(availableWidth));
-				break;
-			case "none":
-				this.editor.setTopBorderProvider(undefined);
-				this.editor.setTopBorder(undefined);
-				break;
-		}
-		this.statusLine.setComposerStyle(style);
+		this.statusLine.attachToEditor(this.editor, style);
 		this.updateEditorBorderColor();
 		this.#persistComposerStatus();
 		this.ui.requestRender();
 	}
 
 	/**
-	 * Cache placeholder-only status chrome so the next launch paints the row
-	 * immediately without presenting values from the previous session.
+	 * Cache the inputs of a fresh session's status bar (settings, model, thinking
+	 * state) so the next launch renders it at first paint; see `createStartupStatusLine`.
 	 */
 	#persistComposerStatus(): void {
 		if (!this.sessionManager.getSessionFile()) return;
-		const shape = cfgComposerShape.get(settings);
-		const style = getComposerStyle(shape);
-		const terminalWidth = this.ui.terminal.columns;
-		const availableWidth = this.editor.getTopBorderAvailableWidth(terminalWidth);
-		const topContent =
-			style.statusAttachment === "top-border"
-				? this.statusLine.renderStartupPlaceholder(availableWidth, "box")
-				: style.statusAttachment === "top-band"
-					? this.statusLine.renderStartupPlaceholder(availableWidth, "band")
-					: style.statusAttachment === "top-rule-chip"
-						? this.statusLine.renderStartupPlaceholder(availableWidth, "plain-right")
-						: undefined;
-		const bottomLines: string[] = [];
-		if (style.bottomBar !== "none") {
-			const content = this.statusLine.renderStartupPlaceholder(
-				terminalWidth,
-				style.bottomBar === "left" ? "plain-left" : "plain-full",
-			);
-			if (content) {
-				if (style.bottomBarGap) bottomLines.push("");
-				bottomLines.push(content);
-			}
-		}
+		const model = this.session.model;
 		// Recover the border's ANSI wrapper by coloring a sentinel and splitting around it.
 		const marker = "\0";
 		const colored = this.editor.borderColor(marker);
 		const markerIndex = colored.indexOf(marker);
-		const snapshot: ComposerStatusSnapshot = {
-			shape,
+		const status: ComposerStatusCache = {
 			borderColor:
 				markerIndex < 0
 					? undefined
@@ -3205,12 +3116,21 @@ export class InteractiveMode implements InteractiveModeContext {
 							prefix: colored.slice(0, markerIndex),
 							suffix: colored.slice(markerIndex + marker.length),
 						},
-			topBorder: topContent ? { content: topContent, width: visibleWidth(topContent) } : undefined,
-			bottomLines,
+			statusLine: {
+				settings: statusLineHost.getSettings(),
+				gitEnabled: statusLineHost.gitEnabled(),
+				model,
+				thinkingLevel: this.session.thinkingLevel,
+				autoThinking: this.session.isAutoThinking,
+				fastMode: this.session.isFastModeActive(),
+				usingSubscription: model ? this.session.modelRegistry.isUsingOAuth(model) : false,
+				autoCompactEnabled: this.session.autoCompactionEnabled,
+				compactionBoundaries: model?.contextWindow
+					? statusLineHost.computeCompactionBoundaries(this.session, model.contextWindow, model)
+					: null,
+			},
 		};
-		void writeComposerStatusCache(this.sessionManager.getCwd(), snapshot).catch(error => {
-			logger.debug("composer status cache write failed", { error });
-		});
+		sharedComposerCache()?.writeStatus(this.sessionManager.getCwd(), status);
 	}
 
 	#handleSessionAccentInputsChanged(): void {
@@ -6251,6 +6171,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		stopSharedSpinnerTicker();
 		this.#liveCommandController.dispose();
 		this.#clearJudgmentBatchProgress();
+		this.#downloadActivityHud.dispose();
 		this.#cancelTodoAutoClearTimer();
 		this.#cancelObserverUiSyncTimer();
 		if (this.#subagentRowPruneTimer) {
@@ -6329,7 +6250,8 @@ export class InteractiveMode implements InteractiveModeContext {
 		// #resumableSessionId).
 		const sessionId = this.#resumableSessionId();
 		if (sessionId) {
-			process.stderr.write(`\n${chalk.dim(`Resume this session with ${resumeCommand(sessionId)}`)}\n`);
+			// Command on its own line so triple-click selects just the command (#11001).
+			process.stderr.write(`\n${chalk.dim("Resume this session with")}\n${chalk.dim(resumeCommand(sessionId))}\n`);
 		}
 
 		await postmortem.quit(0);
@@ -6744,13 +6666,14 @@ export class InteractiveMode implements InteractiveModeContext {
 		}
 	}
 
-	#getWelcomeLspServers(): WelcomeLspServerInfo[] {
+	/** Welcome rows for startup LSP servers; `null` (section hidden) when the session skipped LSP discovery. */
+	#getWelcomeLspServers(servers = this.lspServers): WelcomeLspServerInfo[] | null {
 		return (
-			this.lspServers?.map(server => ({
+			servers?.map(server => ({
 				name: server.name,
 				status: server.status,
 				fileTypes: server.fileTypes,
-			})) ?? []
+			})) ?? null
 		);
 	}
 
@@ -6770,19 +6693,17 @@ export class InteractiveMode implements InteractiveModeContext {
 	#buildConfigWarningComponents(): Component[] {
 		const components: Component[] = [];
 		for (const warning of this.session.configWarnings) {
-			components.push(new Text(theme.fg("warning", `Warning: ${warning}`), 1, 0), new Spacer(1));
+			components.push(
+				new Text(`Warning: ${warning}`, 1, 0).setStyleFn(t => theme.fg("warning", t)),
+				new Spacer(1),
+			);
 		}
 		return components;
 	}
 
 	#persistComposerWelcome(modelName: string, providerName: string): void {
 		if (!this.sessionManager.getSessionFile()) return;
-		void writeComposerWelcomeCache(this.sessionManager.getCwd(), {
-			modelName,
-			providerName,
-		}).catch(error => {
-			logger.debug("composer welcome cache write failed", { error });
-		});
+		sharedComposerCache()?.writeWelcome(this.sessionManager.getCwd(), { modelName, providerName });
 	}
 
 	#updateWelcomeLspServers(): void {

@@ -3,6 +3,7 @@ import * as logger from "@oh-my-pi/pi-utils/logger";
 import {
 	type AutocompleteItem,
 	type AutocompleteProvider,
+	atCompletionMatches,
 	findLeadingSlashCommandStart,
 	findTrailingSlashCommandStart,
 	isDirectoryCompletionValue,
@@ -53,9 +54,21 @@ import { type SelectItem, SelectList, type SelectListLayoutOptions, type SelectL
 
 const PASSTHROUGH_COLOR = (text: string): string => text;
 const MENTION_CONTEXT_RE = /(?:^|\s)\^[^\s]*$/;
+const AT_TOKEN_RE = /(?:^|\s)(@[^\s]*)$/;
 
 const AUTOCOMPLETE_SELECT_LIST_LAYOUT: SelectListLayoutOptions = {
 	overflowSearch: false,
+};
+
+/**
+ * `@` file lists are narrowed in place (`setFilter(liveToken)`) while a fresh
+ * search runs, so a slow walk never leaves entries that contradict the typed
+ * token on screen. An emptied list means the refresh is still pending; the
+ * popup stays open but renders nothing until results arrive.
+ */
+const AT_FILE_SELECT_LIST_LAYOUT: SelectListLayoutOptions = {
+	...AUTOCOMPLETE_SELECT_LIST_LAYOUT,
+	filterItems: (items, token) => items.filter(item => atCompletionMatches(token, item.value)),
 };
 
 const SLASH_COMMAND_SELECT_LIST_LAYOUT: SelectListLayoutOptions = {
@@ -567,6 +580,8 @@ export class Editor implements Component, Focusable {
 	#wrapCache = new Map<string, WrapEntry>();
 	#wrapCacheWidth = -1;
 	#wrapCacheEpoch = -1;
+	/** Last `#getPromptGutter` result, keyed by (gutter string, clamped gutter width). */
+	#promptGutterCache: { source: string; firstLine: string; continuation: string; width: number } | undefined;
 	#paddingXOverride: number | undefined;
 	#maxHeight?: number;
 	#scrollOffset: number = 0;
@@ -1062,11 +1077,16 @@ export class Editor implements Component, Focusable {
 		if (!gutter) return undefined;
 		const gutterWidth = this.#getPromptGutterWidth(width, paddingX);
 		if (gutterWidth === 0) return undefined;
-		return {
+		const cached = this.#promptGutterCache;
+		if (cached !== undefined && cached.source === gutter && cached.width === gutterWidth) return cached;
+		const next = {
+			source: gutter,
 			firstLine: sliceByColumn(gutter, 0, gutterWidth, true),
 			continuation: padding(gutterWidth),
 			width: gutterWidth,
 		};
+		this.#promptGutterCache = next;
+		return next;
 	}
 
 	#getContentWidth(width: number, paddingX: number): number {
@@ -1519,15 +1539,15 @@ export class Editor implements Component, Focusable {
 		if (bottomRow !== undefined) result.push(bottomRow);
 
 		// Add autocomplete list if active
-		if (this.#autocompleteState && this.#autocompleteList) {
+		const autocompleteList = this.#visibleAutocompleteList();
+		if (autocompleteList) {
 			// Clamp the dropdown to the terminal viewport: the editor rows already
 			// rendered above plus a small reserve must stay visible.
 			const viewportRows = this.viewportRowsProvider?.() || process.stdout.rows || Number(Bun.env.LINES) || 24;
-			this.#autocompleteList.setMaxVisible(
+			autocompleteList.setMaxVisible(
 				Math.max(3, Math.min(this.#autocompleteMaxVisible, viewportRows - result.length - 2)),
 			);
-			const autocompleteResult = this.#autocompleteList.render(width);
-			result.push(...autocompleteResult);
+			result.push(...autocompleteList.render(width));
 		}
 
 		return result;
@@ -1631,10 +1651,13 @@ export class Editor implements Component, Focusable {
 
 		// Handle autocomplete special keys first (but don't block other input)
 		if (this.#autocompleteState && this.#autocompleteList) {
-			// Escape - cancel autocomplete
+			// Escape - cancel autocomplete. A hidden popup (empty narrowed `@` list) is
+			// dropped too, so its pending refresh cannot pop up afterward, but the key
+			// falls through: the user never saw anything to dismiss.
 			if (kb.matchesCanonical(canonical, "tui.select.cancel")) {
+				const visible = this.isShowingAutocomplete();
 				this.#cancelAutocomplete(true);
-				return;
+				if (visible) return;
 			}
 			// Right arrow at end of line accepts the selection like Tab (fish-style).
 			// Mid-line, right arrow keeps its cursor-movement role and falls through.
@@ -1669,9 +1692,16 @@ export class Editor implements Component, Focusable {
 					kb.matchesCanonical(canonical, "tui.select.pageUp") ||
 					kb.matchesCanonical(canonical, "tui.select.pageDown")
 				) {
-					this.#autocompleteList.handleInput(data);
-					this.onAutocompleteUpdate?.();
-					return;
+					// An `@` popup whose narrowing filter matched nothing holds no candidate;
+					// let the key fall through instead of swallowing it.
+					if (!this.#autocompleteList.getSelectedItem()) {
+						this.#cancelAutocomplete();
+						this.onAutocompleteUpdate?.();
+					} else {
+						this.#autocompleteList.handleInput(data);
+						this.onAutocompleteUpdate?.();
+						return;
+					}
 				}
 
 				// If Tab was pressed, always apply the selection
@@ -1686,7 +1716,14 @@ export class Editor implements Component, Focusable {
 						this.#cancelAutocomplete();
 						return;
 					}
-					if (selected && this.#autocompleteProvider) {
+					if (!selected) {
+						// An `@` popup whose narrowing filter matched nothing stays open with no
+						// candidate (see #debouncedUpdateAutocomplete). Nothing to accept: cancel the
+						// popup and fall through so Tab keeps its normal completion role and a right
+						// arrow at end of line moves the cursor.
+						this.#cancelAutocomplete();
+						this.onAutocompleteUpdate?.();
+					} else if (this.#autocompleteProvider) {
 						const shouldChainAutocomplete =
 							this.#isSlashCommandNameAutocompleteSelection() || isDirectoryCompletionValue(selected.value);
 						const result = this.#autocompleteProvider.applyCompletion(
@@ -1712,7 +1749,8 @@ export class Editor implements Component, Focusable {
 							queueMicrotask(() => void this.#tryTriggerAutocomplete());
 						}
 					}
-					return;
+					// Only an accepted candidate consumes the key; an empty list falls through.
+					if (selected) return;
 				}
 
 				// If Enter was pressed on a submitted slash command (not an absolute-path
@@ -1756,7 +1794,9 @@ export class Editor implements Component, Focusable {
 					// Check for stale autocomplete state due to buffer edits since last refresh.
 					const currentLine = this.#state.lines[this.#state.cursorLine] ?? "";
 					const currentTextBeforeCursor = currentLine.slice(0, this.#state.cursorCol);
-					if (!this.#autocompletePrefixMatchesCursorText(currentTextBeforeCursor, selected)) {
+					// A narrowed `@` list can be empty while its refresh is pending; Enter
+					// then submits instead of waiting on the search.
+					if (!selected || !this.#autocompletePrefixMatchesCursorText(currentTextBeforeCursor, selected)) {
 						// Autocomplete is stale - cancel and fall through to normal submission
 						this.#cancelAutocomplete();
 					} else {
@@ -4075,7 +4115,11 @@ export class Editor implements Component, Focusable {
 		prefix: string,
 		items: Array<{ value: string; label: string; description?: string }>,
 	): SelectList {
-		const layout = prefix.startsWith("/") ? SLASH_COMMAND_SELECT_LIST_LAYOUT : AUTOCOMPLETE_SELECT_LIST_LAYOUT;
+		const layout = prefix.startsWith("/")
+			? SLASH_COMMAND_SELECT_LIST_LAYOUT
+			: prefix.startsWith("@")
+				? AT_FILE_SELECT_LIST_LAYOUT
+				: AUTOCOMPLETE_SELECT_LIST_LAYOUT;
 		return new SelectList(items, this.#autocompleteMaxVisible, this.#theme.selectList, layout);
 	}
 
@@ -4205,8 +4249,19 @@ export class Editor implements Component, Focusable {
 		}
 	}
 
+	/**
+	 * Whether an autocomplete popup is on screen. An `@` list narrowed to no match
+	 * while its refresh is pending stays open internally but is hidden, so it does
+	 * not claim keys (Escape, Vim mode switches) meant for the editor or app.
+	 */
 	isShowingAutocomplete(): boolean {
-		return this.#autocompleteState !== null;
+		return this.#visibleAutocompleteList() !== undefined;
+	}
+
+	/** The open autocomplete list, unless it has no candidate to show. */
+	#visibleAutocompleteList(): SelectList | undefined {
+		if (this.#autocompleteState === null) return undefined;
+		return this.#autocompleteList?.getSelectedItem() ? this.#autocompleteList : undefined;
 	}
 
 	async #updateAutocomplete(): Promise<void> {
@@ -4256,6 +4311,13 @@ export class Editor implements Component, Focusable {
 		const lines = [...this.#state.lines];
 		const cursorLine = this.#state.cursorLine;
 		const cursorCol = this.#state.cursorCol;
+		const isCurrent = () =>
+			!signal.aborted &&
+			requestId === this.#autocompleteRequestId &&
+			cursorLine === this.#state.cursorLine &&
+			cursorCol === this.#state.cursorCol &&
+			lines.length === this.#state.lines.length &&
+			lines.every((line, index) => line === this.#state.lines[index]);
 		let suggestions: { items: AutocompleteItem[]; prefix: string } | null;
 		try {
 			if (request.kind === "force") {
@@ -4263,7 +4325,9 @@ export class Editor implements Component, Focusable {
 				if (!getForceFileSuggestions) return;
 				suggestions = await getForceFileSuggestions.call(provider, lines, cursorLine, cursorCol, signal);
 			} else {
-				suggestions = await provider.getSuggestions(lines, cursorLine, cursorCol, signal);
+				suggestions = await provider.getSuggestions(lines, cursorLine, cursorCol, signal, partial => {
+					if (partial.items.length > 0 && isCurrent()) this.#showAutocompleteSuggestions(partial, "regular");
+				});
 			}
 		} catch (error) {
 			if (!signal.aborted && requestId === this.#autocompleteRequestId) {
@@ -4273,26 +4337,32 @@ export class Editor implements Component, Focusable {
 			}
 			return;
 		}
-		if (
-			signal.aborted ||
-			requestId !== this.#autocompleteRequestId ||
-			cursorLine !== this.#state.cursorLine ||
-			cursorCol !== this.#state.cursorCol ||
-			lines.length !== this.#state.lines.length ||
-			lines.some((line, index) => line !== this.#state.lines[index])
-		) {
-			return;
-		}
+		if (!isCurrent()) return;
 
 		if (suggestions && Array.isArray(suggestions.items) && suggestions.items.length > 0) {
-			this.#autocompletePrefix = suggestions.prefix;
-			this.#autocompleteList = this.#createAutocompleteList(suggestions.prefix, suggestions.items);
-			this.#autocompleteState = request.kind === "force" ? "force" : "regular";
-			this.onAutocompleteUpdate?.();
+			this.#showAutocompleteSuggestions(suggestions, request.kind === "force" ? "force" : "regular");
 			return;
 		}
 		this.#cancelAutocomplete();
 		this.onAutocompleteUpdate?.();
+	}
+
+	#showAutocompleteSuggestions(
+		suggestions: { items: AutocompleteItem[]; prefix: string },
+		state: "regular" | "force",
+	): void {
+		this.#autocompletePrefix = suggestions.prefix;
+		this.#autocompleteList = this.#createAutocompleteList(suggestions.prefix, suggestions.items);
+		this.#autocompleteState = state;
+		this.onAutocompleteUpdate?.();
+	}
+
+	/** Filter a shown `@` file list to the live `@` token until the debounced refresh replaces it. */
+	#narrowAtFileList(): void {
+		if (!this.#autocompleteList || !this.#autocompletePrefix.startsWith("@")) return;
+		const currentLine = this.#state.lines[this.#state.cursorLine] ?? "";
+		const token = AT_TOKEN_RE.exec(currentLine.slice(0, this.#state.cursorCol))?.[1];
+		if (token !== undefined) this.#autocompleteList.setFilter(token);
 	}
 
 	#invalidateAutocompleteRequests(): void {
@@ -4304,6 +4374,7 @@ export class Editor implements Component, Focusable {
 	}
 
 	#debouncedUpdateAutocomplete(): void {
+		if (this.#autocompleteState !== "assist") this.#narrowAtFileList();
 		if (this.#autocompleteTimeout) {
 			clearTimeout(this.#autocompleteTimeout);
 		}
