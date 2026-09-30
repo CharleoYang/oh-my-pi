@@ -81,7 +81,6 @@ describe("effort-dial-less reasoner encoding (regression)", () => {
 		expect(getSupportedEfforts(grok43).length).toBeGreaterThan(0);
 	});
 });
-
 const singleUserContext: Context = {
 	messages: [{ role: "user", content: "hello", timestamp: 0 }],
 };
