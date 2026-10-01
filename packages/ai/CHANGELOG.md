@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Kept SSE turn-state regression fixtures on their mocked HTTP transport rather than opening real WebSocket connections when run locally.
+
 ## [18.4.9] - 2026-10-01
 
 ### Fixed
