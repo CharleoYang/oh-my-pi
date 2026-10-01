@@ -283,6 +283,7 @@ import {
 } from "./loop-limit";
 import type { LoopConditionConfig, LoopLimitRuntime } from "@oh-my-pi/pi-tui/status-line/loop";
 import { OAuthManualInputManager } from "./oauth-manual-input";
+import { formatPersistenceNotice } from "./persistence-failure";
 import { resolveComposerHint } from "@oh-my-pi/pi-tui/prompt/composer-hints";
 import { hintUsage } from "../utils/usage-counter";
 import {
@@ -449,6 +450,8 @@ type LiveUiSettings = SettingValueOf<typeof cfgLiveUiSettings>;
 
 const STILL_CLOSING_DELAY_MS = 3_000;
 const JUDGMENT_BATCH_PROGRESS_RETAIN_MS = 1_000;
+/** Startup emits several status-bar changes within a second; persist only the settled one. */
+const COMPOSER_STATUS_PERSIST_DELAY_MS = 1_000;
 const DEFAULT_WORKING_MESSAGE = "Working…";
 /** Native working-message shimmer under a session accent: the hue itself is the terminal's `accent`. */
 const NATIVE_ACCENT_SHIMMER: ShimmerPalette = { low: "dim", mid: "accent", high: "accent", bold: true };
@@ -1179,6 +1182,9 @@ export function renderSubagentHudLines(
 
 const CTRL_L_APPEARANCE_RESPONSE_DEADLINE_MS = 2000;
 
+/** Repaint cadence of the open jobs sheet: output tails, pids and list ages are polled, not pushed. */
+const JOBS_SHEET_REFRESH_MS = 250;
+
 export class InteractiveMode implements InteractiveModeContext {
 	#ownsStartedUi: boolean;
 	session: AgentSession;
@@ -1254,6 +1260,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	#todoAutoClearTimer: NodeJS.Timeout | undefined;
 	#todoAutoClearGeneration = 0;
 	#modelCycleClearTimer: NodeJS.Timeout | undefined;
+	#composerStatusPersistTimer: NodeJS.Timeout | undefined;
 	readonly #judgmentBatchProgressHud = new JudgmentBatchProgressHud();
 	readonly #downloadActivityHud = new DownloadActivityHud(() => this.ui.requestRender());
 	readonly #judgmentBatchProgressClearTimers = new Map<string, NodeJS.Timeout>();
@@ -1555,6 +1562,8 @@ export class InteractiveMode implements InteractiveModeContext {
 	#planReviewOverlayHandle: OverlayHandle | undefined;
 	#sessionInfoOverlayHandle: OverlayHandle | undefined;
 	#jobsSheetHandle: OverlayHandle | undefined;
+	/** Re-renders the open jobs sheet so output tails and pids stay live. */
+	#jobsSheetTimer: NodeJS.Timeout | undefined;
 	#planReviewCancel: (() => void) | undefined;
 	/** Serializable review annotations keyed by the resolved plan file path. */
 	#planReviewAnnotationState = new Map<string, PlanReviewAnnotationState>();
@@ -2284,6 +2293,7 @@ export class InteractiveMode implements InteractiveModeContext {
 					`Session persistence failed: ${detail}. Unsaved entries remain in memory; persistence will retry on the next entry.`,
 				);
 			}),
+			this.sessionManager.onPersistenceNotice(notice => this.showWarning(formatPersistenceNotice(notice))),
 			this.sessionManager.onSessionNameChanged(() => {
 				setSessionTerminalTitle(this.sessionManager.getSessionName(), this.sessionManager.getCwd());
 				this.#handleSessionAccentInputsChanged();
@@ -3596,8 +3606,18 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.composer.setPreferences({ composerShape: shape });
 		this.statusLine.attachToEditor(this.editor, style);
 		this.updateEditorBorderColor();
-		this.#persistComposerStatus();
+		this.#scheduleComposerStatusPersist();
 		this.ui.requestRender();
+	}
+
+	/** Coalesce status-cache writes; `stop()` flushes a pending one synchronously. */
+	#scheduleComposerStatusPersist(): void {
+		if (this.#composerStatusPersistTimer) return;
+		this.#composerStatusPersistTimer = setTimeout(() => {
+			this.#composerStatusPersistTimer = undefined;
+			this.#persistComposerStatus();
+		}, COMPOSER_STATUS_PERSIST_DELAY_MS);
+		this.#composerStatusPersistTimer.unref();
 	}
 
 	/**
@@ -3730,7 +3750,10 @@ export class InteractiveMode implements InteractiveModeContext {
 		});
 	}
 
-	/** What the TSP composer shows: the draft's shell mode, the effort chip, and send vs Stop. */
+	/**
+	 * What the TSP composer shows: the draft's shell mode, the effort chip
+	 * (the viewed agent's, like the model chip beside it), and send vs Stop.
+	 */
 	#composerNativeState(): ComposerNativeState {
 		const draft = this.editor.getText().trimStart();
 		return {
@@ -3739,7 +3762,7 @@ export class InteractiveMode implements InteractiveModeContext {
 				: this.isPythonMode
 					? { kind: "python", excluded: draft.startsWith("$$") }
 					: undefined,
-			thinking: thinkingLevelWord(this.session),
+			thinking: thinkingLevelWord(this.viewSession),
 			running: this.loadingAnimation !== undefined || this.session.isStreaming,
 			viewing: this.#viewingLineage(),
 		};
@@ -6870,6 +6893,8 @@ export class InteractiveMode implements InteractiveModeContext {
 		void this.#recorder?.stop();
 		this.#recorder = undefined;
 		// Last chance to refresh the startup status placeholder for the next launch.
+		clearTimeout(this.#composerStatusPersistTimer);
+		this.#composerStatusPersistTimer = undefined;
 		this.#persistComposerStatus();
 		if (this.loadingAnimation) {
 			this.#stopLoadingAnimation(false);
@@ -6889,6 +6914,8 @@ export class InteractiveMode implements InteractiveModeContext {
 			this.#subagentRowPruneTimer = undefined;
 		}
 		this.#cancelGoalContinuation();
+		clearInterval(this.#jobsSheetTimer);
+		this.#jobsSheetTimer = undefined;
 		if (this.#sttController) {
 			this.#sttController.dispose();
 			this.#sttController = undefined;
@@ -7238,9 +7265,12 @@ export class InteractiveMode implements InteractiveModeContext {
 	 * which is why the earlier `showStatus` acknowledgment was reverted. An
 	 * anchored container is cleared and rebuilt in place without adding history
 	 * rows — the same reason the ctrl+p role-cycle track lives there.
+	 *
+	 * A Tern Surface Protocol surface has no append-only scrollback to
+	 * duplicate into, so there the panel mounts in the transcript at once.
 	 */
 	presentCommandOutput(content: Component | readonly Component[]): void {
-		if (!this.session.isStreaming) {
+		if (!this.session.isStreaming || this.ui.nativeRendering) {
 			this.present(content);
 			return;
 		}
@@ -7280,11 +7310,17 @@ export class InteractiveMode implements InteractiveModeContext {
 			this.showWarning("Async background jobs are unavailable in this session.");
 			return;
 		}
-		const sheet = new JobsSheet(
-			() => this.session.getAsyncJobSnapshot({ recentLimit: 5 }) ?? { running: [], recent: [] },
-			() => this.#hideJobsSheet(),
-		);
+		const sheet = new JobsSheet({
+			load: () => this.session.getAsyncJobSnapshot({ recentLimit: 5 }) ?? { running: [], recent: [] },
+			inspect: id => this.session.inspectAsyncJob(id),
+			cancel: id => {
+				this.session.cancelAsyncJob(id);
+				this.ui.requestRender();
+			},
+			close: () => this.#hideJobsSheet(),
+		});
 		this.#jobsSheetHandle = this.ui.showOverlay(sheet, { anchor: "center", width: "90%", maxHeight: "90%" });
+		this.#jobsSheetTimer = setInterval(() => this.ui.requestRender(), JOBS_SHEET_REFRESH_MS);
 		this.ui.setFocus(sheet);
 		this.ui.requestRender();
 	}
@@ -7292,6 +7328,8 @@ export class InteractiveMode implements InteractiveModeContext {
 	#hideJobsSheet(): void {
 		const handle = this.#jobsSheetHandle;
 		this.#jobsSheetHandle = undefined;
+		clearInterval(this.#jobsSheetTimer);
+		this.#jobsSheetTimer = undefined;
 		if (!handle) return;
 		handle.hide();
 		this.#selectorController.focusActiveEditorArea();
@@ -7373,7 +7411,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	showPinnedError(message: string): void {
 		this.#dismissPlanReview();
 		this.errorBannerContainer.clear();
-		this.errorBannerContainer.addChild(new ErrorBannerComponent(message));
+		this.errorBannerContainer.addChild(new ErrorBannerComponent(message, () => this.clearPinnedError()));
 		this.ui.requestRender();
 	}
 
@@ -7426,7 +7464,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		const providerName = this.session.model?.provider ?? "Unknown";
 		this.composer.updateWelcome({ modelName, providerName });
 		this.#persistComposerWelcome(modelName, providerName);
-		this.#persistComposerStatus();
+		this.#scheduleComposerStatusPersist();
 	}
 
 	#syncConfigWarningHeader(): void {
