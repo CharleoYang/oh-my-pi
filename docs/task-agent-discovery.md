@@ -233,12 +233,18 @@ A missing name fails preflight with `Unknown agent "...". Available: ...`; no su
 
 For task dispatch, model precedence is:
 
-1. the task item's explicit `model` (or eval `agent(..., model=...)`)
+1. the call's own `model` selector (task item / flat call, or eval `agent(model=…)`)
 2. `task.agentModelOverrides[agentName]`
 3. the agent frontmatter's prioritized `model` list
 4. the parent's active model, then its configured/default model fallback
 
-Role aliases in any of those sources are expanded through `modelRoles`. Empty or unresolvable request selectors fall through to the next source.
+Role aliases in any of the first three sources are expanded through `modelRoles`, except `@default`
+(equivalently `*`), which names step 4 itself: it resolves to the parent's active model rather than
+to `modelRoles.default`, so a child asked for `@default` runs whatever its parent switched to. A
+per-call `model` is validated before dispatch: the ambiguous literals `default`/`inherit` are
+rejected in favor of an explicit `@default`, and a selector that expands to nothing or matches no
+available model fails the spawn naming the selector rather than silently falling through to a
+lower-precedence source.
 
 After policy resolution, the `before_subagent_spawn` extension hook runs once for the actual dispatch. It can block the spawn or replace the resolved model patterns; a routing note is carried into progress metadata.
 
