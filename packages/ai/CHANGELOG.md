@@ -5,6 +5,8 @@
 ### Fixed
 
 - Kept SSE turn-state regression fixtures on their mocked HTTP transport rather than opening real WebSocket connections when run locally.
+- Made pending Codex WebSocket handshake regression coverage wait for socket construction instead of assuming authentication/header preparation finishes within 5 ms.
+
 ## [18.6.0] - 2026-10-03
 
 ### Fixed

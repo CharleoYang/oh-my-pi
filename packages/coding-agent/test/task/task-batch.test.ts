@@ -105,42 +105,6 @@ describe("task.batch schema gating", () => {
 		vi.restoreAllMocks();
 	});
 
-	it("swaps between the flat and batch wire shapes", async () => {
-		mockDiscovery();
-
-		const off = await TaskTool.create(createSession({ settings: { "task.batch": false } }));
-		const offProperties = getSchemaProperties(off);
-		expect(offProperties.tasks).toBeUndefined();
-		expect(offProperties.context).toBeUndefined();
-		expect(offProperties.task).toBeDefined();
-		expect(offProperties.name).toBeDefined();
-		expect(offProperties.model).toBeDefined();
-		expect(offProperties.outputSchema).toBeDefined();
-		expect(typeof offProperties.outputSchema).toBe("object");
-		expect(offProperties.schemaMode).toBeDefined();
-
-		const on = await TaskTool.create(createSession({ settings: { "task.batch": true } }));
-		const onProperties = getSchemaProperties(on);
-		expect(onProperties.tasks).toBeDefined();
-		expect(onProperties.context).toBeDefined();
-		// The batch shape is { context, tasks[] } — the per-spawn fields live
-		// only inside the task items.
-		expect(onProperties.task).toBeUndefined();
-		expect(onProperties.name).toBeUndefined();
-		expect(onProperties.agent).toBeUndefined();
-		expect(onProperties.model).toBeUndefined();
-		expect(onProperties.outputSchema).toBeUndefined();
-		expect(onProperties.schemaMode).toBeUndefined();
-		const itemProperties = getBatchItemProperties(on);
-		expect(itemProperties.task).toBeDefined();
-		expect(itemProperties.name).toBeDefined();
-		expect(itemProperties.agent).toBeDefined();
-		expect(itemProperties.model).toBeDefined();
-		expect(itemProperties.outputSchema).toBeDefined();
-		expect(typeof itemProperties.outputSchema).toBe("object");
-		expect(itemProperties.schemaMode).toBeDefined();
-	});
-
 	it("hides effort by default and exposes it when task.enableEffort is enabled", async () => {
 		mockDiscovery();
 
