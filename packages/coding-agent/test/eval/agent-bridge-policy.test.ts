@@ -341,19 +341,17 @@ describe("runEvalAgent", () => {
 		expect(secondOptions.outputSchemaOverridesAgent).toBeUndefined();
 	});
 
-	it("drops a per-call model argument on agent() (removed, issue #6438)", async () => {
+	it("retains a per-call model argument on agent() ahead of frontmatter", async () => {
 		mockAgents();
 		const runSpy = vi.spyOn(taskExecutor, "runSubprocess").mockImplementation(async options => singleResult(options));
 
-		// The schema strips unknown keys; a legacy `model` argument is silently
-		// discarded so resolution is identical to omitting it — the agent's own
-		// frontmatter model applies (issue #6438).
-		await runEvalAgentAndWait({ prompt: "work", model: "default" }, { session: makeSession() });
+		await runEvalAgentAndWait({ prompt: "work", model: "tokens/gpt-6.1-sol" }, { session: makeSession() });
 		await runEvalAgentAndWait({ prompt: "work" }, { session: makeSession() });
 
 		const withModel = runSpy.mock.calls[0]?.[0];
 		const withoutModel = runSpy.mock.calls[1]?.[0];
-		expect(withModel?.modelOverride).toEqual(withoutModel?.modelOverride);
+		expect(withModel?.modelOverride).toEqual(["tokens/gpt-6.1-sol"]);
+		expect(withoutModel?.modelOverride).toEqual(["p/active"]);
 	});
 	it("returns host-parsed data for caller, agent, and inherited schemas", async () => {
 		const agentSchema = { type: "object" };
