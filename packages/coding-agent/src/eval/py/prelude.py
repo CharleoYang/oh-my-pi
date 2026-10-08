@@ -25,6 +25,9 @@ if "__omp_prelude_loaded__" not in globals():
 
     def display(value):
         """Render a value. Falls back to a JSON+text/plain bundle for plain dict/list/tuple."""
+        if isinstance(value, dict) and value.get("type") == "image":
+            _omp_display(value)
+            return
         if any(hasattr(value, attr) for attr in _PRESENTABLE_REPRS):
             _omp_display(value)
             return
@@ -471,7 +474,7 @@ if "__omp_prelude_loaded__" not in globals():
             mime_type = image.get("mimeType")
             if not isinstance(data, str) or not isinstance(mime_type, str):
                 continue
-            _omp_display({mime_type: data}, raw=True)
+            _omp_display({"application/x-omp-image": image}, raw=True)
             displayed += 1
         if displayed == 0:
             return value
@@ -735,10 +738,9 @@ if "__omp_prelude_loaded__" not in globals():
             return bool(result.get("cancelled")) if isinstance(result, dict) else False
 
         def __await__(self):
-            return asyncio.get_running_loop().run_in_executor(
-                None,
-                self.wait,
-            ).__await__()
+            # `to_thread` copies the cell's contextvars into the worker; a bare
+            # `run_in_executor` drops them, so the bridge loses its run identity.
+            return asyncio.to_thread(self.wait).__await__()
 
     class AgentHandle(_Handle):
         """Background subagent handle returned by ``agent()``."""
@@ -1001,7 +1003,6 @@ if "__omp_prelude_loaded__" not in globals():
         apply=None,
         merge=None,
         tools=None,
-        model=None,
     ):
         """Start a background subagent and return its handle.
 
@@ -1024,8 +1025,6 @@ if "__omp_prelude_loaded__" not in globals():
             args["merge"] = bool(merge)
         if tools is not None:
             args["tools"] = list(tools)
-        if model is not None:
-            args["model"] = model
         result = _bridge_call("__agent__", args)
         if not isinstance(result, dict) or not isinstance(result.get("id"), str):
             raise RuntimeError("agent() did not return a handle")

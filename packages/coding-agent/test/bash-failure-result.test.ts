@@ -257,3 +257,45 @@ describe("BashTool skill:// containment failures", () => {
 		}
 	});
 });
+
+describe.skipIf(process.platform !== "darwin")("managed bash startup isolation", () => {
+	it("never executes BASH_ENV or ENV before an admitted sandbox command", async () => {
+		const directory = await fs.mkdtemp(path.join(os.tmpdir(), "omp-managed-startup-"));
+		const startup = path.join(directory, "startup.sh");
+		const marker = path.join(directory, "bypassed");
+		const profile = path.join(directory, "readonly.sb");
+		const oldBashEnv = process.env.BASH_ENV;
+		const oldEnv = process.env.ENV;
+		const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
+		try {
+			await fs.writeFile(startup, `printf bypass > ${quote(marker)}\n`);
+			await fs.writeFile(profile, `(version 1) (allow default) (deny file-write* (subpath ${JSON.stringify(directory)}))`);
+			process.env.BASH_ENV = startup;
+			process.env.ENV = startup;
+			const session = makeSession();
+			session.cwd = directory;
+			session.managedHostIsolation = true;
+			const tool = new BashTool(session);
+			const result = await tool.execute("managed-startup", {
+				command: `/usr/bin/sandbox-exec -f ${quote(profile)} /bin/bash --noprofile --norc -c 'printf admitted'`,
+			});
+			expect(result.isError).toBeUndefined();
+			expect(result.content.find(block => block.type === "text")?.text).toContain("admitted");
+			expect(await fs.access(marker).then(() => true, () => false)).toBe(false);
+		} finally {
+			if (oldBashEnv === undefined) delete process.env.BASH_ENV;
+			else process.env.BASH_ENV = oldBashEnv;
+			if (oldEnv === undefined) delete process.env.ENV;
+			else process.env.ENV = oldEnv;
+			await fs.rm(directory, { recursive: true, force: true });
+		}
+	});
+
+	it("rejects service and PTY alternate runners before execution", async () => {
+		const session = makeSession();
+		session.managedHostIsolation = true;
+		const tool = new BashTool(session);
+		await expect(tool.execute("pty", { command: "printf unsafe", pty: true })).rejects.toThrow("service or PTY");
+		await expect(tool.execute("service", { command: "printf unsafe", name: "unsafe" })).rejects.toThrow("service or PTY");
+	});
+});

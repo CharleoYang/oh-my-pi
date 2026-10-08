@@ -233,12 +233,12 @@ A missing name fails preflight with `Unknown agent "...". Available: ...`; no su
 
 For task dispatch, model precedence is:
 
-1. the task item's explicit `model` (or eval `agent(..., model=...)`)
+1. the invocation's per-spawn `model` selector or fallback list
 2. `task.agentModelOverrides[agentName]`
 3. the agent frontmatter's prioritized `model` list
 4. the parent's active model, then its configured/default model fallback
 
-Role aliases in any of those sources are expanded through `modelRoles`. Empty or unresolvable request selectors fall through to the next source.
+Role aliases in the first three sources are expanded through `modelRoles`. Task items and the shared eval `agent()` bridge both accept invocation-local model overrides; this fork retains that contract even though upstream removed it in 18.8.2.
 
 After policy resolution, the `before_subagent_spawn` extension hook runs once for the actual dispatch. It can block the spawn or replace the resolved model patterns; a routing note is carried into progress metadata.
 
@@ -261,6 +261,23 @@ parked agent revived after a restart keeps its per-agent tier instead of re-deri
 `tier.subagent`. The entry is looked up by task/eval dispatch only; Vibe workers launched through
 the same executor keep `tier.subagent`. Service tiers are configuration-only; agent frontmatter and
 the task/eval wire formats do not expose a tier field or automatic Fast policy.
+
+Account selection is independent of model and service-tier selection: an exact, case-sensitive
+`task.agentAccountPools[agentName]` entry maps provider ids to OAuth identity keys (the `identityKey`
+values broker [client account pools](./auth-broker-gateway.md#client-account-pools-routing-not-authorization)
+use, such as `email:<address>|org:<id>` for Anthropic; [`omp usage accounts`](./cli-reference.md)
+lists them). For each listed provider the child authenticates
+only with those accounts: ranking, the parent's copied account affinity, restored pins, fallback
+passes, and credential rotation stay inside the pool, and runtime, environment, and stored API keys
+are not used; a `models.yml` `apiKey` for the provider fails the request instead of sending a pooled
+token to that endpoint. When no pooled account can serve, the request fails with `No API key for
+provider: … restricted to its OAuth account pool` instead of borrowing another account; an empty
+list allows no account. Pools do not pick models, so model and retry-fallback policy still decide
+which provider the child calls. The pool covers every key lookup the agent makes, whatever provider
+session id it carries: fresh or reset sessions, advisors, title generation, skill compression, and
+subagents it spawns without their own entry (an entry of their own replaces it). Vibe workers take
+the pool from their first turn, and a parked agent revived in the same process or after a restart
+takes the live entry for its agent name. A custom SDK `getApiKey` resolver bypasses pools.
 
 Runtime output schema precedence is:
 

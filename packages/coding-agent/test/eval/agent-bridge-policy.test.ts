@@ -341,18 +341,17 @@ describe("runEvalAgent", () => {
 		expect(secondOptions.outputSchemaOverridesAgent).toBeUndefined();
 	});
 
-	it("honors a per-call model argument on agent()", async () => {
+	it("retains a per-call model argument on agent() ahead of frontmatter", async () => {
 		mockAgents();
 		const runSpy = vi.spyOn(taskExecutor, "runSubprocess").mockImplementation(async options => singleResult(options));
-		const session = makeSession({ activeModel: "p/current" });
 
-		await runEvalAgentAndWait({ prompt: "work", model: "openai/gpt-4o" }, { session });
-		await runEvalAgentAndWait({ prompt: "work" }, { session });
+		await runEvalAgentAndWait({ prompt: "work", model: "tokens/gpt-6.1-sol" }, { session: makeSession() });
+		await runEvalAgentAndWait({ prompt: "work" }, { session: makeSession() });
 
 		const withModel = runSpy.mock.calls[0]?.[0];
 		const withoutModel = runSpy.mock.calls[1]?.[0];
-		expect(withModel?.modelOverride).toEqual(["openai/gpt-4o"]);
-		expect(withoutModel?.modelOverride).toEqual(["p/current"]);
+		expect(withModel?.modelOverride).toEqual(["tokens/gpt-6.1-sol"]);
+		expect(withoutModel?.modelOverride).toEqual(["p/active"]);
 	});
 	it("returns host-parsed data for caller, agent, and inherited schemas", async () => {
 		const agentSchema = { type: "object" };
@@ -1056,13 +1055,7 @@ describe("runEvalAgent isolation", () => {
 
 	function mockIsolationContext(): { repoRoot: string } {
 		const repoRoot = "/repo-root";
-		vi.spyOn(isolationRunner, "prepareIsolationContext").mockResolvedValue({
-			repoRoot,
-			baseline: {
-				root: { repoRoot, headCommit: "HEAD", staged: "", unstaged: "", untracked: [], untrackedPatch: "" },
-				nested: [],
-			},
-		});
+		vi.spyOn(isolationRunner, "prepareIsolationContext").mockResolvedValue({ repoRoot });
 		return { repoRoot };
 	}
 

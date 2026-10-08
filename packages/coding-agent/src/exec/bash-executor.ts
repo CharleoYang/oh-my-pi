@@ -13,10 +13,15 @@ import {
 	type ShellRunResult,
 } from "@oh-my-pi/pi-natives";
 import { $env } from "@oh-my-pi/pi-utils/env";
+import { ptree } from "@oh-my-pi/pi-utils";
 import { isCmdShell, isExecutable, type ShellConfig } from "@oh-my-pi/pi-utils/procmgr";
 import { Settings } from "../config/settings";
 import { type OutputArtifactError, OutputSink, type OutputSummary } from "@oh-my-pi/pi-tui/tools/streaming-output";
-import { resolveOutputMaxColumns, resolveOutputSinkHeadBytes } from "../tools/output-meta";
+import {
+	resolveOutputMaxColumns,
+	resolveOutputSinkArtifactMaxBytes,
+	resolveOutputSinkHeadBytes,
+} from "../tools/output-meta";
 import { getOrCreateSnapshot } from "../utils/shell-snapshot";
 import { TerminalGraphicsDecoder } from "../utils/terminal-graphics";
 import { loadDirenvEnv } from "./direnv";
@@ -35,12 +40,20 @@ export interface BashExecutorOptions {
 	/** Milliseconds before aborting the command; 0 disables the executor deadline. */
 	timeout?: number;
 	onChunk?: (chunk: string) => void;
+	/**
+	 * Receives the sink's current inline view ({@link OutputSink.preview}: the
+	 * body the final result will carry so far) at the `onChunk` cadence. Use it
+	 * for live previews instead of re-buffering `onChunk` chunks.
+	 */
+	onPreview?: (text: string) => void;
 	chunkThrottleMs?: number;
 	signal?: AbortSignal;
 	/** Session key suffix to isolate shell sessions per agent */
 	sessionKey?: string;
 	/** Additional environment variables to inject */
 	env?: Record<string, string>;
+	/** Execute an admitted managed command without ambient shell startup or preflight code. */
+	managedHostIsolation?: boolean;
 	/** Run through the configured user shell instead of brush parsing directly. */
 	useUserShell?: boolean;
 	/** Run supported user shells (zsh/fish) on a headless PTY; requires `useUserShell`. */
@@ -50,6 +63,12 @@ export interface BashExecutorOptions {
 	 * `cwd` included). External shells and processes never see it.
 	 */
 	filesystem?: ShellFilesystem;
+	/**
+	 * Invoked once the embedded shell starts the command, with a probe of the
+	 * live pids it spawned (empty once the run ends). Not called on the
+	 * user-shell paths.
+	 */
+	onStart?: (pids: () => readonly number[]) => void;
 	/** Artifact path/id for full output storage */
 	artifactPath?: string;
 	artifactId?: string;
@@ -86,6 +105,8 @@ export interface BashResult {
 	outputLines: number;
 	outputBytes: number;
 	artifactId?: string;
+	/** Bytes the artifact cap dropped from the saved file's middle (the artifact is a head/tail sample). */
+	artifactElidedBytes?: number;
 	artifactError?: OutputArtifactError;
 	workingDir?: string;
 	/** Terminal graphics extracted from raw stdout before sanitization or truncation. */
@@ -252,6 +273,24 @@ function quarantineShellSession(
 			}
 		})
 		.catch(() => undefined);
+}
+
+/**
+ * Drops every persistent Shell owned by an agent session (keys built with
+ * `agentSessionKey` as the {@link BashExecutorOptions.sessionKey}). The map is
+ * process-global, so without this each disposed session keeps its native shell
+ * for the life of the process. A Shell with live background jobs is retained
+ * until they exit, matching the `:async:` teardown; an in-flight run keeps its
+ * own reference and drops the Shell when it settles.
+ */
+export function releaseShellSessions(agentSessionKey: string | undefined): void {
+	if (!agentSessionKey) return;
+	const prefix = `${agentSessionKey}\n`;
+	for (const [key, shell] of shellSessions) {
+		if (!key.startsWith(prefix)) continue;
+		shellSessions.delete(key);
+		if (!shellSessionsInUse.has(key)) void retainShellWithLiveBackgroundJobs(shell);
+	}
 }
 
 function resolveShellCwd(cwd: string | undefined): string | undefined {
@@ -482,7 +521,53 @@ async function executeUserShellPty(run: {
 	};
 }
 
+async function executeManagedBash(command: string, options: BashExecutorOptions): Promise<BashResult> {
+	if (process.platform !== "darwin") throw new Error("Managed bash isolation requires macOS");
+	const inheritedEnv = Object.fromEntries(Object.entries(Bun.env).filter(([, value]) => value !== undefined)) as Record<string, string>;
+	const settings = await Settings.init();
+	const env = buildNonInteractiveEnv({ ...inheritedEnv, ...options.env });
+	// -p also rejects inherited shell functions, SHELLOPTS and BASHOPTS before
+	// the guard's sandbox subprocess is reached. No configurable shell/prefix,
+	// snapshot, direnv, embedded builtin or URL filesystem may run before it.
+	delete env.BASH_ENV;
+	delete env.ENV;
+	const sink = new OutputSink({
+		onChunk: options.onChunk,
+		artifactPath: options.artifactPath,
+		artifactId: options.artifactId,
+		headBytes: resolveOutputSinkHeadBytes(settings),
+		artifactMaxBytes: resolveOutputSinkArtifactMaxBytes(settings),
+		maxColumns: resolveOutputMaxColumns(settings),
+		chunkThrottleMs: options.onChunk ? (options.chunkThrottleMs ?? 50) : 0,
+	});
+	try {
+		const result = await ptree.exec(["/bin/bash", "--noprofile", "--norc", "-p", "-c", command], {
+			cwd: options.cwd,
+			env,
+			signal: options.signal,
+			timeout: options.timeout === 0 ? undefined : Math.max(1_000, options.timeout ?? 300_000),
+			detached: true,
+			allowNonZero: true,
+			allowAbort: true,
+			stderr: "full",
+		});
+		sink.push(result.stdout);
+		sink.push(result.stderr);
+		const cancelled = result.exitError?.aborted === true;
+		const timedOut = cancelled && result.exitError instanceof ptree.TimeoutError;
+		return {
+			exitCode: cancelled ? undefined : (result.exitCode ?? undefined),
+			cancelled,
+			...(timedOut ? { timedOut: true } : {}),
+			...(await sink.dump()),
+		};
+	} finally {
+		await sink.dispose();
+	}
+}
+
 export async function executeBash(command: string, options?: BashExecutorOptions): Promise<BashResult> {
+	if (options?.managedHostIsolation) return executeManagedBash(command, options);
 	const settings = await Settings.init();
 	const baseShellConfig = settings.getShellConfig();
 	const shellConfig =
@@ -501,8 +586,6 @@ export async function executeBash(command: string, options?: BashExecutorOptions
 		supportsAutoUserShell(shell) &&
 		$env.PI_NO_PTY !== "1" &&
 		!isPersistentShellCdCommand(command);
-	const snapshotPath = bashShell ? await getOrCreateSnapshot(shell, shellEnv) : null;
-
 	const minimizer = buildMinimizerOptions(cfgShellMinimizer.get(settings));
 
 	const commandCwd = resolveShellCwd(options?.cwd);
@@ -515,15 +598,19 @@ export async function executeBash(command: string, options?: BashExecutorOptions
 	// signal + timeout so an aborted / short-timeout call can't hang on a cold
 	// `.envrc` load before the abort listener is installed. The helper applies
 	// the configured shell `prefix` after any `unset -v` it prepends. A URL cwd
-	// has no `.envrc` on the host.
-	const preflight = await applyDirenvPreflight(command, commandCwd ?? process.cwd(), {
-		callerEnv: options?.env,
-		signal: options?.signal,
-		timeoutMs: cfgBashDirenvLoadTimeoutMs.get(settings),
-		callerTimeoutMs: options?.timeout,
-		direnvSetting: virtualCwd ? "off" : cfgBashDirenv.get(settings),
-		commandPrefix: prefix,
-	});
+	// has no `.envrc` on the host. The rc snapshot is independent, so both load
+	// concurrently.
+	const [snapshotPath, preflight] = await Promise.all([
+		bashShell ? getOrCreateSnapshot(shell, shellEnv) : null,
+		applyDirenvPreflight(command, commandCwd ?? process.cwd(), {
+			callerEnv: options?.env,
+			signal: options?.signal,
+			timeoutMs: cfgBashDirenvLoadTimeoutMs.get(settings),
+			callerTimeoutMs: options?.timeout,
+			direnvSetting: virtualCwd ? "off" : cfgBashDirenv.get(settings),
+			commandPrefix: prefix,
+		}),
+	]);
 	const commandEnv = buildNonInteractiveEnv(preflight.env);
 	const runCdInPersistentShell = options?.useUserShell === true && !prefix && isPersistentShellCdCommand(command);
 	// Never wrap in cmd.exe: it is only the Windows no-bash fallback for spawn
@@ -535,13 +622,22 @@ export async function executeBash(command: string, options?: BashExecutorOptions
 
 	// Create output sink for truncation and artifact handling
 	const graphics = new TerminalGraphicsDecoder();
-	const sink = new OutputSink({
-		onChunk: usePty ? undefined : options?.onChunk,
+	const onChunk = usePty ? undefined : options?.onChunk;
+	const onPreview = usePty ? undefined : options?.onPreview;
+	const sink: OutputSink = new OutputSink({
+		onChunk:
+			onChunk || onPreview
+				? chunk => {
+						onChunk?.(chunk);
+						onPreview?.(sink.preview());
+					}
+				: undefined,
 		artifactPath: options?.artifactPath,
 		artifactId: options?.artifactId,
 		headBytes: resolveOutputSinkHeadBytes(settings),
+		artifactMaxBytes: resolveOutputSinkArtifactMaxBytes(settings),
 		maxColumns: resolveOutputMaxColumns(settings),
-		chunkThrottleMs: !usePty && options?.onChunk ? (options.chunkThrottleMs ?? 50) : 0,
+		chunkThrottleMs: onChunk || onPreview ? (options?.chunkThrottleMs ?? 50) : 0,
 	});
 
 	// sink.push() is synchronous — buffer management, counters, and onChunk
@@ -685,6 +781,7 @@ export async function executeBash(command: string, options?: BashExecutorOptions
 				}
 			},
 		);
+		options?.onStart?.(() => executionShell.pids());
 
 		const ey = new ExponentialYield();
 		const winner = await ey.race<

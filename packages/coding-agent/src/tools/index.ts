@@ -218,6 +218,8 @@ export interface ToolSession {
 	settingsApproval?: boolean;
 	/** Whether this session has begun disposal. */
 	isDisposed?: () => boolean;
+	/** Parent-managed execution gates must run before any speculative child launch. */
+	managedHostIsolation?: boolean;
 	/**
 	 * Suppress the spawn specialization/coordination advisory appended to `task`
 	 * results. Set by internal/programmatic callers (e.g. the commit agent's

@@ -286,11 +286,11 @@ function resolveSpawnItems(params: TaskParams): TaskItem[] {
 	}
 	const item: TaskItem = { name: params.name, agent: params.agent, task: params.task };
 	if ("solutionSpace" in params) item.solutionSpace = params.solutionSpace;
+	if ("model" in params) item.model = params.model;
 	if ("outputSchema" in params) item.outputSchema = params.outputSchema;
 	if ("schemaMode" in params) item.schemaMode = params.schemaMode;
 	if ("tools" in params) item.tools = params.tools;
 	if ("effort" in params) item.effort = params.effort;
-	if ("model" in params) item.model = params.model;
 	if ("isolated" in params) item.isolated = params.isolated;
 	return [item];
 }
@@ -310,11 +310,11 @@ function spawnParamsFor(params: TaskParams, item: TaskItem, defaultAgent: string
 	if (item.task !== undefined) spawn.task = item.task;
 	if (item.solutionSpace !== undefined) spawn.solutionSpace = item.solutionSpace;
 	if (params.context !== undefined) spawn.context = params.context;
+	if ("model" in item) spawn.model = item.model;
 	if ("outputSchema" in item) spawn.outputSchema = item.outputSchema;
 	if ("schemaMode" in item) spawn.schemaMode = item.schemaMode;
 	if ("tools" in item) spawn.tools = item.tools;
 	if ("effort" in item) spawn.effort = item.effort;
-	if ("model" in item) spawn.model = item.model;
 	if (item.isolated !== undefined) {
 		spawn.isolated = item.isolated;
 	} else if ("isolated" in params) {
@@ -361,12 +361,16 @@ interface MergedSyncPayloads {
 	usage?: Usage;
 	outputPaths?: string[];
 	projectAgentsDir: string | null;
+	/** Some spawn returned an error result. */
+	isError: boolean;
 }
 
 /**
  * Merge per-spawn sync payloads into one result view. `index` is each spawn's
  * position in the original call so batch rows keep stable ordering; a missing
- * payload (cancelled before start) becomes an explanatory content line.
+ * payload (cancelled before start) becomes an explanatory content line. An
+ * error payload from any spawn makes the merged view an error too, the way a
+ * one-spawn call returns that payload as is.
  */
 function mergeSyncPayloads(
 	spawns: SyncSpawnRef[],
@@ -378,6 +382,7 @@ function mergeSyncPayloads(
 	const usageTotals = createUsageTotals();
 	let hasUsage = false;
 	let projectAgentsDir: string | null = null;
+	let isError = false;
 	for (let position = 0; position < spawns.length; position++) {
 		const payload = payloads[position];
 		const { item, index } = spawns[position];
@@ -385,6 +390,7 @@ function mergeSyncPayloads(
 			contentParts.push(`Task ${item.name?.trim() || `#${index + 1}`}: cancelled before start.`);
 			continue;
 		}
+		isError ||= payload.isError === true;
 		projectAgentsDir ??= payload.details?.projectAgentsDir ?? null;
 		const text = payload.content.find(part => part.type === "text")?.text;
 		if (text) contentParts.push(text);
@@ -403,6 +409,7 @@ function mergeSyncPayloads(
 		usage: hasUsage ? usageTotals : undefined,
 		outputPaths: outputPaths.length > 0 ? outputPaths : undefined,
 		projectAgentsDir,
+		isError,
 	};
 }
 
@@ -643,6 +650,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 	readonly speculation: ToolSpeculationPolicy = {
 		stream: {
 			open: async context => {
+				if (this.session.managedHostIsolation) return undefined;
 				if (!cfgTaskSpeculativeLaunch.get(this.session.settings) || !this.#isBatchEnabled()) return undefined;
 				if (!context.coordinator.authorizeLaunch) return undefined;
 				const id = context.parentToolCallId;
@@ -1234,6 +1242,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 			.join("\n\n");
 		return withAdvisory({
 			content: [{ type: "text", text: text.length > 0 ? text : "No results." }],
+			...(merged.isError ? { isError: true } : {}),
 			details: buildAsyncDetails(),
 		});
 	}
@@ -1307,6 +1316,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 							? nextProgress.resolvedModelIsFallback
 							: undefined;
 						progress.advisor = nextProgress.advisor ?? progress.advisor;
+						progress.completionPercent = nextProgress.completionPercent ?? progress.completionPercent;
 						progress.resolvedModelRoute = nextProgress.resolvedModelRoute ?? progress.resolvedModelRoute;
 						progress.tokens = nextProgress.tokens;
 						progress.requests = nextProgress.requests;
@@ -1448,8 +1458,9 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 	/**
 	 * Sync fan-out (async unavailable, or every item's agent type is
 	 * `blocking: true`): run every spawn to completion inline and merge the
-	 * per-spawn payloads into a single tool result. The session-scoped
-	 * semaphore still bounds concurrency across parallel task calls.
+	 * per-spawn payloads into a single tool result, an error when any spawn's
+	 * payload is. The session-scoped semaphore still bounds concurrency across
+	 * parallel task calls.
 	 */
 	async #executeSyncFanout(
 		toolCallId: string,
@@ -1507,6 +1518,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 		const merged = mergeSyncPayloads(spawns, payloads);
 		return {
 			content: [{ type: "text", text: merged.contentParts.join("\n\n") }],
+			...(merged.isError ? { isError: true } : {}),
 			details: {
 				projectAgentsDir: merged.projectAgentsDir,
 				results: merged.results,

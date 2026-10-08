@@ -17,7 +17,6 @@ import {
 	layoutPinnedHud,
 	nextSubagentPreviewTickMs,
 	renderSubagentHudLines,
-	SUBAGENT_OBSERVER_UI_COALESCE_MS,
 	SubagentHudComponent,
 } from "@oh-my-pi/pi-coding-agent/modes/interactive-mode";
 import { type ObservableSession, SessionObserverRegistry } from "@oh-my-pi/pi-tui/overlays/session-observer-registry";
@@ -939,36 +938,6 @@ describe("InteractiveMode subagent observer UI sync", () => {
 		resetSettingsForTest();
 	});
 
-	it("coalesces a burst of progress observer changes into one HUD rebuild and render request", async () => {
-		await mode.init({ suppressWelcomeIntro: true });
-		const requestRender = vi.spyOn(mode.ui, "requestRender").mockImplementation(() => {});
-		const mountHud = vi.spyOn(mode.subagentContainer, "addChild");
-		const updateHud = vi.spyOn(SubagentHudComponent.prototype, "update");
-		vi.useFakeTimers();
-
-		for (let index = 0; index < 6; index++) {
-			eventBus.emit(
-				TASK_SUBAGENT_PROGRESS_CHANNEL,
-				makeProgressPayload(`BurstAgent${index}`, index, `Burst job ${index}`, true),
-			);
-		}
-
-		await Promise.resolve();
-		// The braille HUD animates continuously while any agent runs (one frame
-		// every FRAME_INTERVAL_MS), so `runAllTimers()` never terminates here.
-		// Advance past the observer coalescing window instead.
-		vi.advanceTimersByTime(SUBAGENT_OBSERVER_UI_COALESCE_MS * 2);
-		await Promise.resolve();
-
-		const hud = Bun.stripANSI(mode.subagentContainer.render(120).join("\n"));
-		expect(hud).toContain("BurstAgent0: Burst job 0");
-		expect(hud).toContain("BurstAgent2: Burst job 2");
-		expect(hud).not.toContain("BurstAgent3: Burst job 3");
-		expect(hud).toContain("3 more — expand");
-		expect(mountHud.mock.calls.length + updateHud.mock.calls.length).toBe(1);
-		expect(requestRender).toHaveBeenCalledTimes(1);
-	});
-
 	it("applies the setting over a clicked expand override", async () => {
 		await mode.init({ suppressWelcomeIntro: true });
 		for (let index = 0; index < 5; index++) {
@@ -985,28 +954,4 @@ describe("InteractiveMode subagent observer UI sync", () => {
 		expect(hudText()).toContain("more — expand");
 	});
 
-	it("advances a quiet call's elapsed marker by repainting the same HUD in place", async () => {
-		cfgDisplaySubagentLivePreview.override(Settings.instance, true);
-		await mode.init({ suppressWelcomeIntro: true });
-		vi.spyOn(mode.ui, "requestRender").mockImplementation(() => {});
-		vi.useFakeTimers();
-		setSystemTime(1_000_000);
-		const payload = makeProgressPayload("Sleeper", 0, "Run sleep", true);
-		payload.progress = {
-			...payload.progress,
-			currentTool: "bash",
-			currentToolArgs: "sleep 40",
-			currentToolStartMs: 1_000_000 - 20_000,
-		};
-		eventBus.emit(TASK_SUBAGENT_PROGRESS_CHANNEL, payload);
-		await Promise.resolve();
-		vi.advanceTimersByTime(100); // observer UI coalesce window
-		const hudText = () => Bun.stripANSI(mode.subagentContainer.render(120).join("\n"));
-		const hud = mode.subagentContainer.children[0];
-		expect(hudText()).toContain("bash: sleep 40 · 20.1s");
-
-		vi.advanceTimersByTime(1_000);
-		expect(mode.subagentContainer.children[0]).toBe(hud);
-		expect(hudText()).toContain("bash: sleep 40 · 21.1s");
-	});
 });
