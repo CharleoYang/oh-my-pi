@@ -6,7 +6,6 @@ import { MAIN_AGENT_ID } from "../registry/agent-registry";
 import { createEvalCustomTools, describeEvalTools } from "../task/eval-tools";
 import {
 	buildStructuredSubagentRecoveryHint,
-	invalidModelSelectorReason,
 	reserveStructuredSubagentId,
 	resolveEffectiveSubagentPolicy,
 	runStructuredSubagent,
@@ -26,7 +25,6 @@ export const EVAL_AGENT_BRIDGE_NAME = "__agent__";
 const agentArgsSchema = type({
 	prompt: "string>0",
 	"agent?": "string>0",
-	"model?": "string | string[]",
 	"label?": "string",
 	"model?": "string | string[]",
 	"schema?": "unknown",
@@ -41,7 +39,6 @@ const agentArgsSchema = type({
 interface EvalAgentArgs {
 	prompt: string;
 	agent?: string;
-	model?: string | string[];
 	label?: string;
 	model?: string | string[];
 	schema?: unknown;
@@ -94,10 +91,6 @@ function parseAgentArgs(args: unknown): EvalAgentArgs {
 	if (result instanceof type.errors) {
 		throw new ToolError(`agent() received invalid arguments: ${result.summary}`);
 	}
-	// The wire layer owns blank and malformed-array rejection so
-	// the shared preflight's empty-selector carve-out stays internal-only.
-	const selectorProblem = invalidModelSelectorReason(result.model, "agent()");
-	if (selectorProblem) throw new ToolError(selectorProblem);
 	return result;
 }
 
