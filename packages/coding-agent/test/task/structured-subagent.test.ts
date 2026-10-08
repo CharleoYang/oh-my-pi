@@ -134,6 +134,17 @@ afterEach(() => {
 });
 
 describe("structured subagent primitive", () => {
+	it("rejects managed isolated workspace changes and executable definition overrides at preflight", async () => {
+		const managed = session({ isolationEnabled: true });
+		managed.managedHostIsolation = true;
+		await expect(resolveEffectiveSubagentPolicy(request({ session: managed, isolation: { requested: true } }))).rejects.toThrow("admitted workspace");
+		for (const key of ["extensions", "plugins", "hooks", "shell", "shellPath", "shellEnv", "cwd", "worktree"]) {
+			mockDiscovery({ ...AGENT, [key]: ["untrusted"] });
+			await expect(resolveEffectiveSubagentPolicy(request({ session: managed }))).rejects.toThrow(`override ${key}`);
+			vi.restoreAllMocks();
+		}
+	});
+
 	it("resolves user-tagged model agents for task and eval but rejects untagged names", async () => {
 		mockDiscovery();
 		const taggedSession = session();

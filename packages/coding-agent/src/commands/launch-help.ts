@@ -95,6 +95,10 @@ export const launchHelp = {
 			description: "Load an extension file (can be used multiple times)",
 			multiple: true,
 		}),
+		"trusted-extension": Flags.string({
+			description: "Load only explicitly trusted absolute extension paths with managed host isolation (repeatable)",
+			multiple: true,
+		}),
 		"no-extensions": Flags.boolean({
 			description: "Disable extension discovery (explicit -e paths still work)",
 		}),

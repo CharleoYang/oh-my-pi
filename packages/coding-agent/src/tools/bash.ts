@@ -855,6 +855,7 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 						sessionKey: `${this.session.getSessionId?.() ?? ""}:async:${jobId}`,
 						timeout: options.timeoutMs ?? 0,
 						signal: runSignal,
+						managedHostIsolation: this.session.managedHostIsolation,
 						// Bound to the job's own signal: the job outlives the call that started it.
 						filesystem: this.#urlFilesystem(runSignal, options.approvalTier).shellFilesystem(),
 						artifactPath,
@@ -955,6 +956,9 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 		ctx?: AgentToolContext,
 	): Promise<AgentToolResult<BashToolDetails>> {
 		let command = rawCommand;
+		if (this.session.managedHostIsolation && (rawName?.trim() || pty === true)) {
+			throw new ToolError("Managed bash cannot use service or PTY backends");
+		}
 
 		// Extract a leading `cd <path> && ...` into cwd when the model ignores the
 		// cwd parameter. The scanner captures only a single path token and defers
@@ -993,7 +997,7 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 		// Check both the original command and the cwd-normalized command so
 		// leading `cd ... &&` wrappers do not hide either shell-navigation rules
 		// or the dedicated-tool command that follows the directory change.
-		if (cfgBashInterceptorEnabled.get(this.session.settings)) {
+		if (!this.session.managedHostIsolation && cfgBashInterceptorEnabled.get(this.session.settings)) {
 			const rules = cfgBashInterceptorPatterns
 				.get(this.session.settings)
 				.filter(rule => !name || rule.tool !== "bash");
@@ -1006,7 +1010,7 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 			}
 		}
 
-		if (cfgWorktreeClone.get(this.session.settings)) {
+		if (!this.session.managedHostIsolation && cfgWorktreeClone.get(this.session.settings)) {
 			command = rewriteGitWorktreeAdd(command, resolveCliEntryCmd());
 		}
 
@@ -1131,7 +1135,7 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 		// The client-bridge terminal provides a live terminal card in the editor;
 		// when available it wins over auto-backgrounding (both are opt-in, and
 		// auto-background would otherwise silently disable the terminal route).
-		const clientBridge = this.session.getClientBridge?.();
+		const clientBridge = this.session.managedHostIsolation ? undefined : this.session.getClientBridge?.();
 		const bridgeTerminalAvailable = Boolean(
 			clientBridge?.capabilities.terminal && clientBridge.createTerminal && !pty && virtualCwd === undefined,
 		);
@@ -1519,6 +1523,7 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 					sessionKey: this.session.getSessionId?.() ?? undefined,
 					timeout: timeoutMs ?? 0,
 					signal,
+					managedHostIsolation: this.session.managedHostIsolation,
 					filesystem: this.#urlFilesystem(signal, approvalTier).shellFilesystem(),
 					artifactPath,
 					artifactId,

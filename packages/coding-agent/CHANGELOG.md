@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Managed host sessions now execute admitted bash commands without ambient shell startup, snapshots, direnv, shell prefixes or alternate terminal backends. Managed children retain the parent's prepared guard and reject executable agent overrides or isolated workspace changes; ordinary sessions keep their existing behavior.
+
+
 ## [18.6.2] - 2026-10-04
 
 ### Fixed

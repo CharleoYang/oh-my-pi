@@ -381,6 +381,9 @@ function renderIsolationError(context: IsolationErrorContext): string {
  * sibling and its path is named in the resulting error.
  */
 export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<SingleResult> {
+	if (opts.baseOptions.managedHostIsolation) {
+		throw new Error("Managed child cannot change its admitted workspace");
+	}
 	let taskBaseline: WorktreeBaseline | undefined;
 	/** Fingerprint of the delta already handed to the caller at run end; release only re-captures on change. */
 	let handedOff: bigint | number | undefined;

@@ -1659,6 +1659,7 @@ export async function buildSessionOptions(
 		});
 		options.disableExtensionDiscovery = true;
 		options.additionalExtensionPaths = trustedPaths;
+		options.managedHostIsolation = true;
 	} else {
 		// Additional extension paths from CLI
 		const cliExtensionPaths = [...(parsed.extensions ?? []), ...(parsed.hooks ?? [])];

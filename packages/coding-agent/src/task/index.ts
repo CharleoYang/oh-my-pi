@@ -663,6 +663,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 	readonly speculation: ToolSpeculationPolicy = {
 		stream: {
 			open: async context => {
+				if (this.session.managedHostIsolation) return undefined;
 				if (!cfgTaskSpeculativeLaunch.get(this.session.settings) || !this.#isBatchEnabled()) return undefined;
 				if (!context.coordinator.authorizeLaunch) return undefined;
 				const id = context.parentToolCallId;

@@ -482,6 +482,10 @@ let runningCommand: string | undefined;
 
 /** Run the CLI with the given argv (no `process.argv` prefix). */
 export async function runCli(argv: string[]): Promise<void> {
+	if (argv.length === 1 && argv[0] === "--managed-host-capabilities") {
+		process.stdout.write('{"enforcementVersion":"hlx_host_admission_v1"}\n');
+		return;
+	}
 	let resolvedArgv = argv;
 	try {
 		const extracted = extractProfileFlags(resolvedArgv);

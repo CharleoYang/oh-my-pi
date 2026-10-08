@@ -491,6 +491,8 @@ export interface ExtensionContext {
 	getContextUsage(): ContextUsage | undefined;
 	/** Get a read-only snapshot of async jobs owned by this session. */
 	getAsyncJobSnapshot(): AsyncJobSnapshot | null;
+	/** Present only when the host disables ambient executable capabilities and speculative child launch. */
+	getManagedHostCapabilities?(): Readonly<{ enforcementVersion: "hlx_host_admission_v1" }> | undefined;
 	/** Compact the session context (interactive mode shows UI). */
 	compact(instructionsOrOptions?: string | CompactOptions): Promise<void>;
 	/** Whether UI is available (false in print/RPC mode) */

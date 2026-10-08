@@ -345,6 +345,9 @@ export async function resolveEffectiveSubagentPolicy(
 	const agentName = request.agent?.trim() || spawnPolicy.defaultAgent;
 	const planMode = request.session.getPlanModeState?.()?.enabled === true;
 	assertPlanControlsAllowed(request, planMode);
+	if (request.session.managedHostIsolation && request.isolation?.requested) {
+		throw new StructuredSubagentError("preflight", "Managed child cannot change its admitted workspace");
+	}
 	assertDepthAndSpawnAllowed(request, agentName);
 
 	const discovery = await discoverAgents(request.session.cwd, undefined, request.session.effectiveExtensionRoots?.());
@@ -370,6 +373,13 @@ export async function resolveEffectiveSubagentPolicy(
 	}
 
 	const effectiveAgent = planMode ? createPlanModeAgent(agent) : agent;
+	if (request.session.managedHostIsolation) {
+		for (const key of ["extensions", "plugins", "hooks", "shell", "shellPath", "shellEnv", "cwd", "worktree"]) {
+			if (Object.hasOwn(effectiveAgent, key)) {
+				throw new StructuredSubagentError("preflight", `Managed child cannot override ${key}`);
+			}
+		}
+	}
 	const schema = resolveSchema(request, effectiveAgent);
 	if (schema.source === "caller" || (schema.source !== "none" && schema.mode === "strict")) {
 		const { error } = buildOutputValidator(schema.schema);
@@ -602,7 +612,7 @@ function buildExecutorOptions(
 	const { skills, autoloadSkills } = resolveAutoloadSkills(session, policy.agent);
 	const localProtocolOptions = sessionLocalProtocolOptions(session);
 	const restrictToolNames = policy.planMode || session.restrictToolNames === true;
-	const enableMCP = !restrictToolNames && (session.enableMCP ?? true);
+	const enableMCP = !restrictToolNames && !session.managedHostIsolation && (session.enableMCP ?? true);
 	return {
 		cwd: session.cwd,
 		additionalDirectories: session.additionalDirectories,
@@ -659,7 +669,7 @@ function buildExecutorOptions(
 		inheritedSessionAgents: session.getSessionAgents?.(),
 		mcpManager: enableMCP ? (session.mcpManager ?? MCPManager.instance()) : undefined,
 		enableMCP,
-		customTools: request.customTools,
+		customTools: session.managedHostIsolation ? undefined : request.customTools,
 		workPoolYieldItems: request.workPoolYieldItems,
 		contextFiles: session.contextFiles?.filter(file => path.basename(file.path).toLowerCase() !== "agents.md"),
 		skills,
@@ -671,9 +681,10 @@ function buildExecutorOptions(
 		// recursive sub-discovery; preloaded paths only avoid re-scanning/reusing
 		// parent-bound extension instances while constructing the child.
 		extensionRoots: session.effectiveExtensionRoots?.bind(session),
-		preloadedExtensionPaths: restrictToolNames ? [] : session.extensionPaths,
+		preloadedExtensionPaths: restrictToolNames || session.managedHostIsolation ? [] : session.extensionPaths,
 		preloadedPreparedExtensions: session.preparedExtensions,
-		preloadedCustomToolPaths: restrictToolNames ? [] : session.customToolPaths,
+		managedHostIsolation: session.managedHostIsolation,
+		preloadedCustomToolPaths: restrictToolNames || session.managedHostIsolation ? [] : session.customToolPaths,
 		localProtocolOptions,
 		parentArtifactManager: session.getArtifactManager?.() ?? undefined,
 		parentHindsightSessionState: session.getHindsightSessionState?.(),

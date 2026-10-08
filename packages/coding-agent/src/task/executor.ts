@@ -501,6 +501,8 @@ export interface ExecutorOptions {
 	preloadedExtensionPaths?: string[];
 	/** Parent-imported extension factories rebound to the child runtime. */
 	preloadedPreparedExtensions?: readonly PreparedExtension[];
+	/** Preserve the parent's trusted host isolation and execution-gate capabilities. */
+	managedHostIsolation?: boolean;
 	/**
 	 * Parent's discovered custom-tool source paths. Forwarded to skip the
 	 * `.omp/tools/` FS scan in the subagent; the subagent then re-binds each
@@ -3746,6 +3748,19 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 		signal,
 		onProgress,
 	} = options;
+	if (options.managedHostIsolation) {
+		if (worktree !== undefined) throw new Error("Managed child cannot change its admitted workspace");
+		if (
+			!options.preloadedPreparedExtensions?.length ||
+			options.preloadedPreparedExtensions.some(extension => extension.error || !extension.factory) ||
+			options.extensionRoots?.().mode !== "explicit-only"
+		) {
+			throw new Error("Managed child requires the parent's prepared guard and explicit-only extension roots");
+		}
+		for (const key of ["extensions", "plugins", "hooks", "shell", "shellPath", "shellEnv", "cwd", "worktree"]) {
+			if (Object.hasOwn(agent, key)) throw new Error(`Managed child cannot override ${key}`);
+		}
+	}
 	const cleanupGraceMs = options.cleanupGraceMs ?? TASK_ABORT_CLEANUP_GRACE_MS;
 	const startTime = Date.now();
 	// Set by the session's onFirstChatDispatch hook the first time the agent
@@ -4131,10 +4146,10 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 			}
 
 			const restrictToolNames = options.restrictToolNames === true;
-			const enableMCP = !restrictToolNames && (options.enableMCP ?? true);
+			const enableMCP = !restrictToolNames && !options.managedHostIsolation && (options.enableMCP ?? true);
 			const mcpManager = enableMCP ? options.mcpManager : undefined;
 			const mcpProxyTools = mcpManager ? createMCPProxyTools(mcpManager) : [];
-			const sessionCustomTools = [...mcpProxyTools, ...(options.customTools ?? [])];
+			const sessionCustomTools = options.managedHostIsolation ? [] : [...mcpProxyTools, ...(options.customTools ?? [])];
 
 			// Derive subagent-scoped telemetry from the parent's config so the
 			// child loop's spans nest under the parent's active execute_tool span
@@ -4199,6 +4214,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 					outputSchema,
 					outputSchemaMode: options.outputSchemaMode,
 					restrictToolNames: options.restrictToolNames,
+					managedHostIsolation: options.managedHostIsolation,
 					requireYieldTool: true,
 					contextFiles: options.contextFiles,
 					skills: options.skills,
@@ -4206,9 +4222,9 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 					workspaceTree: options.workspaceTree,
 					rules: options.rules,
 					extensionRoots: options.extensionRoots,
-					preloadedExtensionPaths: restrictToolNames ? [] : options.preloadedExtensionPaths,
+					preloadedExtensionPaths: restrictToolNames || options.managedHostIsolation ? [] : options.preloadedExtensionPaths,
 					preloadedPreparedExtensions: options.preloadedPreparedExtensions,
-					preloadedCustomToolPaths: restrictToolNames ? [] : options.preloadedCustomToolPaths,
+					preloadedCustomToolPaths: restrictToolNames || options.managedHostIsolation ? [] : options.preloadedCustomToolPaths,
 					hasUI: false,
 					prewalk,
 					spawns: spawnsEnv,

@@ -632,6 +632,8 @@ export interface CreateAgentSessionOptions {
 	additionalExtensionPaths?: string[];
 	/** Disable extension discovery (explicit paths still load). */
 	disableExtensionDiscovery?: boolean;
+	/** Trusted managed hosts disable ambient executable tools and pre-admission task speculation. */
+	managedHostIsolation?: boolean;
 	/**
 	 * Live extension-root policy inherited by a child session. Keeps recursive
 	 * sub-discovery aligned with the parent while `preloadedExtensionPaths` only
@@ -1620,6 +1622,9 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	const extensionRoots = options.extensionRoots?.();
 	const explicit = extensionRoots?.explicit ?? options.additionalExtensionPaths ?? [];
 	const mode = extensionRoots?.mode ?? (options.disableExtensionDiscovery ? "explicit-only" : "merge");
+	if (options.managedHostIsolation && mode !== "explicit-only") {
+		throw new Error("Managed host isolation requires explicit-only extension roots");
+	}
 	return await withOmpExtensionRootScope(explicit, mode, () => createAgentSessionScoped(options));
 }
 
@@ -2108,7 +2113,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 	let hasSession = false;
 	let hasRegistered = false;
 	const restrictToolNames = options.restrictToolNames === true;
-	const enableLsp = options.enableLsp ?? !restrictToolNames;
+	const enableLsp = options.managedHostIsolation ? false : (options.enableLsp ?? !restrictToolNames);
 	const lspReadOnly = options.lspReadOnly ?? restrictToolNames;
 	// Only the first top-level session in a process owns an AsyncJobManager.
 	// Subagents inherit the parent's manager via `AsyncJobManager.instance()`
@@ -2184,6 +2189,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			setActiveToolNames,
 			toolRegistry,
 			hasUI: options.hasUI ?? false,
+			managedHostIsolation: options.managedHostIsolation === true,
 			canPromptUser: options.interactivePrompts ?? options.hasUI ?? false,
 			settingsApproval: options.settingsApproval === true && !isSubagentSession,
 			// Explicit resolvers retain their existing pass-through contract. Ordinary
@@ -2195,7 +2201,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			},
 			enableLsp,
 			lspReadOnly,
-			enableIrc: restrictToolNames ? false : options.enableIrc,
+			enableIrc: restrictToolNames || options.managedHostIsolation ? false : options.enableIrc,
 			/**
 			 * Frozen at the last system-prompt rebuild: a mid-session `/skillful`
 			 * toggle rides the next turn's notice, never the tool prefix. The
@@ -2410,7 +2416,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 		});
 
 		// Restricted sessions cannot inherit or discover MCP capabilities.
-		const enableMCP = !restrictToolNames && (options.enableMCP ?? true);
+		const enableMCP = !restrictToolNames && !options.managedHostIsolation && (options.enableMCP ?? true);
 		let mcpManager: MCPManager | undefined = enableMCP ? options.mcpManager : undefined;
 		toolSession.mcpManager = mcpManager;
 		toolSession.enableMCP = enableMCP;
@@ -2519,7 +2525,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 		const builtInToolNames = [...toolRegistry.keys()];
 		let customToolPaths: ToolPathWithSource[] = [];
 		const inlineExtensions: ExtensionFactory[] = [];
-		if (!restrictToolNames) {
+		if (!restrictToolNames && !options.managedHostIsolation) {
 			// Discover custom tools from `.omp/tools/`, `.claude/tools/`, plugins, etc.
 			// Subagents reuse the parent's scan via `preloadedCustomToolPaths` to skip
 			// the FS walk, but ALWAYS re-call `loadCustomTools` here so factories bind
@@ -3241,6 +3247,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 				depth: taskDepth,
 				...(options.parentAgentId ? { parentId: options.parentAgentId } : {}),
 			}),
+			options.managedHostIsolation === true,
 		);
 
 		credentialDisabledTarget = extensionRunner;

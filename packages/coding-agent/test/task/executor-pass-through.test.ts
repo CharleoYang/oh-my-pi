@@ -15,6 +15,7 @@ import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { cfgCompaction } from "@oh-my-pi/pi-coding-agent/session/context-settings";
 import { parseAgentFields } from "@oh-my-pi/pi-coding-agent/discovery/helpers";
 import type { ToolPathWithSource } from "@oh-my-pi/pi-coding-agent/extensibility/custom-tools";
+import { bindPreparedExtensions } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/loader";
 import type { LoadExtensionsResult, PreparedExtension } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/types";
 import type { MCPManager } from "@oh-my-pi/pi-coding-agent/mcp/manager";
 import type { CreateAgentSessionOptions, CreateAgentSessionResult } from "@oh-my-pi/pi-coding-agent/sdk";
@@ -114,6 +115,55 @@ function createModelRegistry(
 describe("runSubprocess parent-discovery pass-through (issue #2190)", () => {
 	afterEach(() => {
 		vi.restoreAllMocks();
+	});
+
+	it("rebinds the inherited managed guard instead of child executable paths", async () => {
+		const prepared: PreparedExtension[] = [{
+			path: "/trusted/guard.ts",
+			resolvedPath: "/trusted/guard.ts",
+			error: null,
+			factory: api => {
+				api.on("tool_call", () => ({ block: true, reason: "inherited guard" }));
+			},
+		}];
+		const session = yieldEmittingSession();
+		const spy = vi.spyOn(sdkModule, "createAgentSession").mockImplementation(async options => {
+			const bound = await bindPreparedExtensions(options.preloadedPreparedExtensions ?? [], options.cwd!, new EventBus());
+			const handler = bound.extensions[0]?.handlers.get("tool_call")?.[0];
+			expect(handler).toBeDefined();
+			expect(await handler!({ type: "tool_call", toolName: "write", toolCallId: "guard-probe", input: { path: ".loopx/state" } } as never, {} as never)).toEqual({ block: true, reason: "inherited guard" });
+			return createSessionResult(session);
+		});
+		const result = await runSubprocess({
+			...baseOptions,
+			id: "managed-guard-child",
+			managedHostIsolation: true,
+			preloadedPreparedExtensions: prepared,
+			extensionRoots: () => ({ explicit: ["/trusted/guard.ts"], mode: "explicit-only", configured: [], configuredLevel: "user" }),
+			preloadedExtensionPaths: ["/untrusted/override.ts"],
+			preloadedCustomToolPaths: [{ path: "/untrusted/tool.ts", source: { provider: "config", providerName: "Config", level: "project" } }],
+		});
+		expect(result.exitCode).toBe(0);
+		expect(spy.mock.calls[0]?.[0]?.preloadedPreparedExtensions).toBe(prepared);
+		expect(spy.mock.calls[0]?.[0]?.preloadedExtensionPaths).toEqual([]);
+		expect(spy.mock.calls[0]?.[0]?.preloadedCustomToolPaths).toEqual([]);
+		expect(spy.mock.calls[0]?.[0]?.enableMCP).toBe(false);
+	});
+
+	it("fails closed before child startup for lost guards, workspace changes and executable definitions", async () => {
+		const spy = vi.spyOn(sdkModule, "createAgentSession").mockResolvedValue(createSessionResult(yieldEmittingSession()));
+		const managed = {
+			...baseOptions,
+			managedHostIsolation: true,
+			preloadedPreparedExtensions: [{ path: "/trusted/guard.ts", resolvedPath: "/trusted/guard.ts", factory: () => {}, error: null }],
+			extensionRoots: () => ({ explicit: ["/trusted/guard.ts"], mode: "explicit-only" as const, configured: [], configuredLevel: "user" as const }),
+		};
+		await expect(runSubprocess({ ...managed, preloadedPreparedExtensions: undefined })).rejects.toThrow("prepared guard");
+		await expect(runSubprocess({ ...managed, worktree: "/other/workspace" })).rejects.toThrow("admitted workspace");
+		for (const key of ["extensions", "plugins", "hooks", "shell", "shellPath", "shellEnv", "cwd", "worktree"]) {
+			await expect(runSubprocess({ ...managed, agent: { ...baseAgent, [key]: ["untrusted"] } })).rejects.toThrow(`override ${key}`);
+		}
+		expect(spy).not.toHaveBeenCalled();
 	});
 
 	it("forwards rules, extension-root policy, prepared extensions, and preloaded source paths to createAgentSession", async () => {

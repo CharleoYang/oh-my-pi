@@ -13,6 +13,7 @@ import {
 	type ShellRunResult,
 } from "@oh-my-pi/pi-natives";
 import { $env } from "@oh-my-pi/pi-utils/env";
+import { ptree } from "@oh-my-pi/pi-utils";
 import { isCmdShell, isExecutable, type ShellConfig } from "@oh-my-pi/pi-utils/procmgr";
 import { Settings } from "../config/settings";
 import { type OutputArtifactError, OutputSink, type OutputSummary } from "@oh-my-pi/pi-tui/tools/streaming-output";
@@ -45,6 +46,8 @@ export interface BashExecutorOptions {
 	sessionKey?: string;
 	/** Additional environment variables to inject */
 	env?: Record<string, string>;
+	/** Execute an admitted managed command without ambient shell startup or preflight code. */
+	managedHostIsolation?: boolean;
 	/** Run through the configured user shell instead of brush parsing directly. */
 	useUserShell?: boolean;
 	/** Run supported user shells (zsh/fish) on a headless PTY; requires `useUserShell`. */
@@ -512,7 +515,53 @@ async function executeUserShellPty(run: {
 	};
 }
 
+async function executeManagedBash(command: string, options: BashExecutorOptions): Promise<BashResult> {
+	if (process.platform !== "darwin") throw new Error("Managed bash isolation requires macOS");
+	const inheritedEnv = Object.fromEntries(Object.entries(Bun.env).filter(([, value]) => value !== undefined)) as Record<string, string>;
+	const settings = await Settings.init();
+	const env = buildNonInteractiveEnv({ ...inheritedEnv, ...options.env });
+	// -p also rejects inherited shell functions, SHELLOPTS and BASHOPTS before
+	// the guard's sandbox subprocess is reached. No configurable shell/prefix,
+	// snapshot, direnv, embedded builtin or URL filesystem may run before it.
+	delete env.BASH_ENV;
+	delete env.ENV;
+	const sink = new OutputSink({
+		onChunk: options.onChunk,
+		artifactPath: options.artifactPath,
+		artifactId: options.artifactId,
+		headBytes: resolveOutputSinkHeadBytes(settings),
+		artifactMaxBytes: resolveOutputSinkArtifactMaxBytes(settings),
+		maxColumns: resolveOutputMaxColumns(settings),
+		chunkThrottleMs: options.onChunk ? (options.chunkThrottleMs ?? 50) : 0,
+	});
+	try {
+		const result = await ptree.exec(["/bin/bash", "--noprofile", "--norc", "-p", "-c", command], {
+			cwd: options.cwd,
+			env,
+			signal: options.signal,
+			timeout: options.timeout === 0 ? undefined : Math.max(1_000, options.timeout ?? 300_000),
+			detached: true,
+			allowNonZero: true,
+			allowAbort: true,
+			stderr: "full",
+		});
+		sink.push(result.stdout);
+		sink.push(result.stderr);
+		const cancelled = result.exitError?.aborted === true;
+		const timedOut = cancelled && result.exitError instanceof ptree.TimeoutError;
+		return {
+			exitCode: cancelled ? undefined : (result.exitCode ?? undefined),
+			cancelled,
+			...(timedOut ? { timedOut: true } : {}),
+			...(await sink.dump()),
+		};
+	} finally {
+		await sink.dispose();
+	}
+}
+
 export async function executeBash(command: string, options?: BashExecutorOptions): Promise<BashResult> {
+	if (options?.managedHostIsolation) return executeManagedBash(command, options);
 	const settings = await Settings.init();
 	const baseShellConfig = settings.getShellConfig();
 	const shellConfig =
