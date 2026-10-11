@@ -7,7 +7,7 @@ provider "opencode-go" {
 
 	// Go's ids-only roster serves this V4.1 Flash alias before models.dev does.
 	// Use the Go sibling's rate card, not the first-party DeepSeek price.
-	seed api="openai-completions" base-url="https://opencode.ai/zen/go/v1" bundle="always" {
+	seed api="openai-completions" base-url="https://opencode.ai/zen/go/v1" bundle="always" supplement-roster=#false {
 		model "deepseek-flash" name="DeepSeek V4.1 Flash" {
 			reasoning #true
 			input "text" "image"

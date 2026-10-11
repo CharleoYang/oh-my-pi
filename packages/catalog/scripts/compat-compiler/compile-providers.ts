@@ -68,7 +68,7 @@ true satisfies _MissingKnownApis extends never ? true : ["KNOWN_APIS is missing 
 
 const BUNDLE_POLICIES = ["always", "fallback", "empty", "never"] as const satisfies readonly SeedBundlePolicy[];
 const DEFAULT_BUNDLE: SeedBundlePolicy = "always";
-const SEED_PROPS = ["api", "base-url", "bundle", "precedence"] as const;
+const SEED_PROPS = ["api", "base-url", "bundle", "precedence", "supplement-roster"] as const;
 const MODEL_PROPS = ["name", "api", "base-url"] as const;
 const COST_PROPS = ["input", "output", "cache-read", "cache-write"] as const;
 const LIMIT_PROPS = ["context", "max-tokens"] as const;
@@ -268,6 +268,7 @@ function parseSeed(node: KdlNodeView, provider: string): ParsedSeed {
 	}
 	const precedence = propString(node, "precedence") ?? "upstream";
 	if (precedence !== "upstream" && precedence !== "seed") malformed(node);
+	const supplementRoster = propBool(node, "supplement-roster");
 	const defaults: SeedDefaults = { api: propApi(node), baseUrl: propString(node, "base-url") };
 	const models: CompiledSeedModel[] = [];
 	let modelsFrom: string | undefined;
@@ -292,7 +293,16 @@ function parseSeed(node: KdlNodeView, provider: string): ParsedSeed {
 		}
 	}
 	if (models.length === 0 && modelsFrom === undefined) malformed(node);
-	return { seed: { bundle: bundle ?? DEFAULT_BUNDLE, precedence, models }, modelsFrom, node };
+	return {
+		seed: {
+			bundle: bundle ?? DEFAULT_BUNDLE,
+			precedence,
+			...(supplementRoster !== undefined && { supplementRoster }),
+			models,
+		},
+		modelsFrom,
+		node,
+	};
 }
 
 function parseKindApis(node: KdlNodeView): Partial<Record<KindApiKind, Api>> {

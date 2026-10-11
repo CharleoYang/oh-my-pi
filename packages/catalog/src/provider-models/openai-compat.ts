@@ -13,7 +13,7 @@ import {
 import { xaiResponsesReasoningEffortMap } from "../compat/openai";
 import { hasModelScopedEffortLadder, resolveModelPolicy } from "../compat/resolve";
 import { compareRevision, parseRevision } from "../compat/revision";
-import { providerEntries, seedModels } from "../compat/providers";
+import { providerEntries, providerEntry, seedModels } from "../compat/providers";
 import { billingVariantPlain, classifyModel, discoveryVocabulary } from "../compat/taxonomy";
 import {
 	DEFAULT_OPENAI_COMPATIBLE_DISCOVERY_TIMEOUT_MS,
@@ -3360,9 +3360,8 @@ function openCodeModelManagerOptions(
 					fetch: config?.fetch,
 				});
 				if (!discovered) return null;
-				// Go's credential-scoped roster is authoritative. The bundled
-				// Flash alias hydrates matching ids; it must not add an unlisted id.
-				if (providerId === "opencode-go") return discovered;
+				// A seed may hydrate listed ids without widening a credential-scoped roster.
+				if (providerEntry(providerId)?.seed?.supplementRoster === false) return discovered;
 				const seeds = seedModels(providerId).map(seed => ({ ...seed, baseUrl: basePath }));
 				const seedIds = new Set(seeds.map(seed => seed.id));
 				return [...discovered.filter(model => !seedIds.has(model.id)), ...seeds];

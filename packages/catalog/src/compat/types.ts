@@ -642,6 +642,8 @@ export interface CompiledSeed {
 	 * (default): rows are appended and same-id upstream rows win.
 	 */
 	precedence: "upstream" | "seed";
+	/** Whether runtime discovery adds seed rows absent from the live roster (default true). */
+	supplementRoster?: boolean;
 	/** Rows in declaration order (inherited `models-from` rows appended last). */
 	models: CompiledSeedModel[];
 }

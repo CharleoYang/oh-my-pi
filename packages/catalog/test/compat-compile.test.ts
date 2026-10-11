@@ -581,6 +581,9 @@ describe("provider catalog grammar", () => {
 		expect(() =>
 			compileProviders(seeded('api="openai-completions" base-url="https://x" bundle="sometimes"', "")),
 		).toThrow(/seed bundle must be one of/);
+		expect(() =>
+			compileProviders(seeded('api="openai-completions" base-url="https://x" supplement-roster="false"', "")),
+		).toThrow(/directive `seed` has a malformed value/);
 	});
 
 	test("models-from copies rows under the inheriting provider; entries are keyed and sorted by id", () => {
