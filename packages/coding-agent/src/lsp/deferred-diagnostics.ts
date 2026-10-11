@@ -28,8 +28,8 @@ export class DeferredDiagnostics {
 				this.#inject(path, diagnostics, mutationVersion);
 			},
 			signal: controller.signal,
-			finalize: diagnostics => {
-				if (!diagnostics) {
+			finalize: pending => {
+				if (pending) {
 					this.#pendingFetches.set(path, controller);
 				} else {
 					controller.abort();

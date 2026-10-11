@@ -787,6 +787,62 @@ describe("LSP diagnostics freshness", () => {
 		expect(await Bun.file(filePath).text()).toBe("export const value: number = 'x';\n");
 	});
 
+	it("keeps slow diagnostics pending instead of reporting a formatted write clean", async () => {
+		const filePath = path.join(tempDir.path(), "formatted-write.ts");
+		const uri = fileToUri(filePath);
+		const client = createClient(tempDir.path(), TEST_SERVER);
+		client.serverCapabilities = { documentFormattingProvider: true };
+		const clock = new VirtualClock(Date.now());
+		installVirtualTime(clock);
+
+		vi.spyOn(lspConfig, "loadConfig").mockReturnValue({ servers: {}, idleTimeoutMs: undefined });
+		vi.spyOn(lspConfig, "getServersForFile").mockReturnValue([["test-lsp", TEST_SERVER]]);
+		vi.spyOn(lspClient, "getOrCreateClient").mockResolvedValue(client);
+		vi.spyOn(lspClient, "notifyWorkspaceWatchedFiles").mockResolvedValue();
+		vi.spyOn(lspClient, "syncContent").mockImplementation(async mockClient => {
+			mockClient.openFiles.set(uri, { version: 1, languageId: "typescript" });
+		});
+		// The formatter leaves the file unchanged.
+		vi.spyOn(lspClient, "sendRequest").mockResolvedValue([]);
+		vi.spyOn(lspClient, "notifySaved").mockImplementation(async mockClient => {
+			clock.in(2000, () => {
+				publishDiagnostics(mockClient, uri, [createDiagnostic("formatted write deferred error")], 1);
+			});
+		});
+
+		const queued = Promise.withResolvers<DeferredDiagnosticsEntry>();
+		const mutationVersions = new Map<string, number>();
+		const session: ToolSession = {
+			cwd: tempDir.path(),
+			hasUI: false,
+			getSessionFile: () => null,
+			getSessionSpawns: () => "*",
+			settings: Settings.isolated({
+				"lsp.formatOnWrite": true,
+				"lsp.diagnosticsOnWrite": true,
+			}),
+			enableLsp: true,
+			queueDeferredDiagnostics: entry => queued.resolve(entry),
+			bumpFileMutationVersion: target => {
+				const version = (mutationVersions.get(target) ?? 0) + 1;
+				mutationVersions.set(target, version);
+				return version;
+			},
+			getFileMutationVersion: target => mutationVersions.get(target) ?? 0,
+		};
+
+		const result = await new WriteTool(session).execute("write-formatted-deferred", {
+			path: filePath,
+			content: "export const value: number = 'x';\n",
+		});
+
+		expect(result.details?.diagnostics?.formatter).toBe(FileFormatResult.UNCHANGED);
+		expect(result.details?.diagnostics?.summary).not.toBe("OK");
+		const late = await queued.promise;
+		expect(late.errored).toBe(true);
+		expect(late.messages.some(message => message.includes("formatted write deferred error"))).toBe(true);
+	});
+
 	it("queues fresh late diagnostics for a slow server after an edit", async () => {
 		const filePath = path.join(tempDir.path(), "edit-tool.ts");
 		const uri = fileToUri(filePath);

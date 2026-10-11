@@ -106,13 +106,29 @@ type ResolvedWritethroughOptions = {
 export type WritethroughDeferredHandle = {
 	onDeferredDiagnostics: (diagnostics: FileDiagnosticsResult) => void;
 	signal: AbortSignal;
-	finalize: (diagnostics: FileDiagnosticsResult | undefined) => void;
+	/**
+	 * Called once the write returns. `pending` is true when a late fetch was
+	 * handed to `onDeferredDiagnostics` and must stay alive; otherwise the
+	 * handle's fetch can be cancelled.
+	 */
+	finalize: (pending: boolean) => void;
 };
 
 export interface WritethroughResult {
 	diagnostics?: FileDiagnosticsResult;
 	finalContent: string;
 }
+
+/** {@link WritethroughResult} plus whether diagnostics were handed to the deferred channel. */
+interface LspWritethroughOutcome extends WritethroughResult {
+	diagnosticsDeferred: boolean;
+}
+
+/**
+ * Summary for a result that carries formatter status while diagnostics are
+ * still being fetched in the background; never report such a file as clean.
+ */
+const PENDING_DIAGNOSTICS_SUMMARY = "diagnostics pending";
 
 /** Callback type for the LSP writethrough */
 export type WritethroughCallback = (
@@ -195,9 +211,11 @@ export async function flushLspWritethroughBatch(
 		.diagnostics;
 }
 
+/** Merge per-file batch results; `pending` marks a batch with diagnostics still arriving via the deferred channel. */
 function mergeDiagnostics(
 	results: Array<FileDiagnosticsResult | undefined>,
 	options: ResolvedWritethroughOptions,
+	pending: boolean,
 ): FileDiagnosticsResult | undefined {
 	const messages: string[] = [];
 	const servers = new Set<string>();
@@ -237,7 +255,7 @@ function mergeDiagnostics(
 		return undefined;
 	}
 
-	let summary = options.enableDiagnostics ? "no issues" : "OK";
+	let summary = pending ? PENDING_DIAGNOSTICS_SUMMARY : options.enableDiagnostics ? "no issues" : "OK";
 	let errored = false;
 	let limitedMessages = messages;
 	if (messages.length > 0) {
@@ -301,9 +319,10 @@ async function scheduleDeferredDiagnosticsFetch(args: {
  * publishes must settle with no newer publish before inline acceptance. If
  * nothing fresh arrives in the inline window and a deferred
  * channel is available, the in-flight fetch is handed off to deliver late via
- * `onDeferredDiagnostics`, and this returns `undefined` so the tool result
- * lands immediately. Without a deferred channel (direct/CI callers) it blocks
- * for the standard budget so the result is still returned inline.
+ * `onDeferredDiagnostics`, and this returns `{ deferred: true }` with no
+ * diagnostics so the tool result lands immediately. Without a deferred channel
+ * (direct/CI callers) it blocks for the standard budget so the result is still
+ * returned inline.
  */
 async function fetchDiagnosticsWithDeferral(args: {
 	dst: string;
@@ -314,20 +333,19 @@ async function fetchDiagnosticsWithDeferral(args: {
 	transformDiagnostics?: ResolvedWritethroughOptions["transformDiagnostics"];
 	deferred?: { onDeferredDiagnostics: (diagnostics: FileDiagnosticsResult) => void; signal: AbortSignal };
 	signal?: AbortSignal;
-}): Promise<FileDiagnosticsResult | undefined> {
+}): Promise<{ diagnostics?: FileDiagnosticsResult; deferred: boolean }> {
 	const { dst, cwd, servers, minVersions, expectedDocumentVersions, transformDiagnostics, deferred, signal } = args;
 	const apply = (d: FileDiagnosticsResult | undefined) =>
 		d && transformDiagnostics ? transformDiagnostics(dst, d) : d;
 
 	if (!deferred) {
 		// No late-injection channel: block for the standard budget and return inline.
-		return apply(
-			await getDiagnosticsForFile(dst, cwd, servers, {
-				signal,
-				minVersions,
-				expectedDocumentVersions,
-			}),
-		);
+		const diagnostics = await getDiagnosticsForFile(dst, cwd, servers, {
+			signal,
+			minVersions,
+			expectedDocumentVersions,
+		});
+		return { diagnostics: apply(diagnostics), deferred: false };
 	}
 
 	// One background fetch with a generous inner budget; await it only briefly inline.
@@ -337,13 +355,12 @@ async function fetchDiagnosticsWithDeferral(args: {
 		expectedDocumentVersions,
 		timeoutMs: DEFERRED_DIAGNOSTICS_WAIT_TIMEOUT_MS,
 	});
-	const INLINE_TIMEOUT = Symbol("inline-diagnostics-timeout");
 	const raced = await Promise.race([
-		fetchPromise,
-		Bun.sleep(INLINE_DIAGNOSTICS_WAIT_TIMEOUT_MS).then(() => INLINE_TIMEOUT),
+		fetchPromise.then(diagnostics => ({ diagnostics })),
+		Bun.sleep(INLINE_DIAGNOSTICS_WAIT_TIMEOUT_MS).then(() => undefined),
 	]);
-	if (raced !== INLINE_TIMEOUT) {
-		return apply(raced as FileDiagnosticsResult | undefined);
+	if (raced) {
+		return { diagnostics: apply(raced.diagnostics), deferred: false };
 	}
 	// Slow server: deliver late via the deferred channel; nothing inline. The
 	// deferred sink (edit tool) applies its own dedup, so pass the raw result.
@@ -352,7 +369,7 @@ async function fetchDiagnosticsWithDeferral(args: {
 			if (diagnostics && !deferred.signal.aborted) deferred.onDeferredDiagnostics(diagnostics);
 		})
 		.catch(() => {});
-	return undefined;
+	return { deferred: true };
 }
 
 async function runLspWritethrough(
@@ -368,7 +385,7 @@ async function runLspWritethrough(
 		signal: AbortSignal;
 	},
 	runOptions?: RunLspWritethroughOptions,
-): Promise<WritethroughResult> {
+): Promise<LspWritethroughOutcome> {
 	const { enableFormat, enableDiagnostics } = options;
 	const contentAlreadyWritten = runOptions?.contentAlreadyWritten ?? false;
 
@@ -404,7 +421,7 @@ async function runLspWritethrough(
 	if (!enableFormat && !enableDiagnostics) {
 		await commitWrite();
 		await notifyWriteCommitted();
-		return { finalContent, diagnostics: undefined };
+		return { finalContent, diagnostics: undefined, diagnosticsDeferred: false };
 	}
 
 	const config = getConfig(cwd);
@@ -413,7 +430,7 @@ async function runLspWritethrough(
 	if (servers.length === 0) {
 		await commitWrite();
 		await notifyWriteCommitted();
-		return { finalContent, diagnostics: undefined };
+		return { finalContent, diagnostics: undefined, diagnosticsDeferred: false };
 	}
 	const { lspServers, customLinterServers } = splitServers(servers);
 	const useCustomFormatter = enableFormat && customLinterServers.length > 0;
@@ -427,6 +444,7 @@ async function runLspWritethrough(
 
 	let formatter: FileFormatResult | undefined;
 	let diagnostics: FileDiagnosticsResult | undefined;
+	let diagnosticsDeferred = false;
 	let timedOut = false;
 	let synced = false;
 	let operationSignal: AbortSignal | undefined;
@@ -522,6 +540,7 @@ async function runLspWritethrough(
 			diagnostics = undefined;
 			// Schedule background diagnostic fetch if caller wants deferred results
 			if (deferred && !deferred.signal.aborted && enableDiagnostics) {
+				diagnosticsDeferred = true;
 				void scheduleDeferredDiagnosticsFetch({
 					dst,
 					cwd,
@@ -543,7 +562,7 @@ async function runLspWritethrough(
 	}
 
 	if (synced && enableDiagnostics) {
-		diagnostics = await fetchDiagnosticsWithDeferral({
+		({ diagnostics, deferred: diagnosticsDeferred } = await fetchDiagnosticsWithDeferral({
 			dst,
 			cwd,
 			servers,
@@ -552,20 +571,20 @@ async function runLspWritethrough(
 			transformDiagnostics: options.transformDiagnostics,
 			deferred,
 			signal,
-		});
+		}));
 	}
 
 	if (formatter !== undefined) {
 		diagnostics ??= {
 			server: servers.map(([name]) => name).join(", "),
 			messages: [],
-			summary: "OK",
+			summary: diagnosticsDeferred ? PENDING_DIAGNOSTICS_SUMMARY : "OK",
 			errored: false,
 		};
 		diagnostics.formatter = formatter;
 	}
 
-	return { finalContent, diagnostics };
+	return { finalContent, diagnostics, diagnosticsDeferred };
 }
 
 async function flushWritethroughBatch(
@@ -580,6 +599,7 @@ async function flushWritethroughBatch(
 		return { finalContent: "" };
 	}
 	const results: Array<FileDiagnosticsResult | undefined> = [];
+	let pending = false;
 	const finalContents = new Map<string, string>();
 	for (const entry of batch) {
 		const bundle = getDeferred?.(entry.dst);
@@ -588,7 +608,7 @@ async function flushWritethroughBatch(
 			content = await fs.promises.readFile(entry.dst, "utf8");
 		} catch (error) {
 			if (isEnoent(error)) {
-				bundle?.finalize(undefined);
+				bundle?.finalize(false);
 				continue;
 			}
 			// A brokered write may deny read-back even after the write succeeds.
@@ -614,7 +634,8 @@ async function flushWritethroughBatch(
 			{ contentAlreadyWritten: true },
 		);
 		finalContents.set(entry.dst, diag.finalContent);
-		bundle?.finalize(diag.diagnostics);
+		bundle?.finalize(diag.diagnosticsDeferred);
+		pending ||= diag.diagnosticsDeferred;
 		results.push(diag.diagnostics);
 	}
 	const finalContent = requestedDst
@@ -622,7 +643,7 @@ async function flushWritethroughBatch(
 		: "";
 	return {
 		finalContent,
-		diagnostics: mergeDiagnostics(results, options),
+		diagnostics: mergeDiagnostics(results, options, pending),
 	};
 }
 
@@ -650,7 +671,7 @@ export function createLspWritethrough(cwd: string, options?: WritethroughOptions
 					onDeferredDiagnostics: bundle.onDeferredDiagnostics,
 					signal: bundle.signal,
 				} as const);
-			const diagnostics = await runLspWritethrough(
+			const { finalContent, diagnostics, diagnosticsDeferred } = await runLspWritethrough(
 				dst,
 				content,
 				cwd,
@@ -660,8 +681,8 @@ export function createLspWritethrough(cwd: string, options?: WritethroughOptions
 				file,
 				deferredInner,
 			);
-			bundle?.finalize(diagnostics.diagnostics);
-			return diagnostics;
+			bundle?.finalize(diagnosticsDeferred);
+			return { finalContent, diagnostics };
 		}
 
 		// File commits are never deferred: the batch owns only LSP post-processing,
