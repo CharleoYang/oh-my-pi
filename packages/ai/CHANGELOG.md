@@ -8,6 +8,7 @@
 ### Fixed
 
 - Fixed Devin-routed OpenAI models rejecting every turn with `invalid_argument` after switching an existing session from `openai-codex` ([#15234](https://github.com/can1357/oh-my-pi/issues/15234))
+- Fixed turns ending without automatic retry when a gateway forwards Go's `use of closed network connection` transport error; it now retries like other dropped connections ([#15385](https://github.com/can1357/oh-my-pi/issues/15385))
 
 ### Added
 
