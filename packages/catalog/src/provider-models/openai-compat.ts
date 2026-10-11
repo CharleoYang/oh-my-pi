@@ -3283,6 +3283,7 @@ function openCodeModelManagerOptions(
 		dropCachedModelIdsOnStaticMismatch: [
 			...apiRouteExactModelIds(providerId),
 			...OPENCODE_CACHE_MIGRATION_MODEL_IDS,
+			...seedModels(providerId).map(seed => seed.id),
 			...(providerId === "opencode-zen" ? OPENCODE_ZEN_CACHE_MIGRATION_MODEL_IDS : []),
 		],
 		modelsDev: {
@@ -3359,6 +3360,9 @@ function openCodeModelManagerOptions(
 					fetch: config?.fetch,
 				});
 				if (!discovered) return null;
+				// Go's credential-scoped roster is authoritative. The bundled
+				// Flash alias hydrates matching ids; it must not add an unlisted id.
+				if (providerId === "opencode-go") return discovered;
 				const seeds = seedModels(providerId).map(seed => ({ ...seed, baseUrl: basePath }));
 				const seedIds = new Set(seeds.map(seed => seed.id));
 				return [...discovered.filter(model => !seedIds.has(model.id)), ...seeds];

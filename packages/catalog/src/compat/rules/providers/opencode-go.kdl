@@ -5,6 +5,19 @@ provider "opencode-go" {
 	env "OPENCODE_API_KEY"
 	dynamic-models-authoritative #true
 
+	// Go's ids-only roster serves this V4.1 Flash alias before models.dev does.
+	// Use the Go sibling's rate card, not the first-party DeepSeek price.
+	seed api="openai-completions" base-url="https://opencode.ai/zen/go/v1" bundle="always" {
+		model "deepseek-flash" name="DeepSeek V4.1 Flash" {
+			reasoning #true
+			input "text" "image"
+			cost input=0.15 output=0.6 cache-read=0.003 cache-write=0
+			limits context=1000000 max-tokens=384000
+			thinking-mode "effort"
+			thinking-efforts "low" "high" "max"
+		}
+	}
+
 	// The Flash lanes accept images despite their IDs lacking a vision suffix;
 	// verified against the gateway (unguessable pixel-rendered text read back
 	// verbatim). Mirrors the OpenRouter carve-out for deepseek-v4.1-flash.
