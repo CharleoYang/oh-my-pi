@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed Git diffs failing when staged or committed changes update a submodule pin ([#15457](https://github.com/can1357/oh-my-pi/issues/15457)).
+
 ## [18.10.0] - 2026-10-12
 
 ### Added

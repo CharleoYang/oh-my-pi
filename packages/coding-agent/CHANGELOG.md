@@ -4,7 +4,7 @@
 
 ### Fixed
 
-- Fixed isolated tasks failing or sharing submodule Git state when started from linked worktrees with initialized recursive submodules ([#15457](https://github.com/can1357/oh-my-pi/issues/15457)).
+- Fixed isolated tasks failing on linked worktrees with initialized recursive submodules and leaving updated submodule pins unreachable after cleanup ([#15457](https://github.com/can1357/oh-my-pi/issues/15457)).
 
 ## [18.10.1] - 2026-10-12
 
