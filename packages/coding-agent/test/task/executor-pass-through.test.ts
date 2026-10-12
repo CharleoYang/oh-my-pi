@@ -138,7 +138,7 @@ describe("runSubprocess parent-discovery pass-through (issue #2190)", () => {
 			},
 		}];
 		const session = yieldEmittingSession();
-		const spy = vi.spyOn(sdkModule, "createAgentSession").mockImplementation(async options => {
+		const spy = vi.spyOn(sdkModule, "createAgentSession").mockImplementation(async (options = {}) => {
 			const bound = await bindPreparedExtensions(options.preloadedPreparedExtensions ?? [], options.cwd!, new EventBus());
 			const handler = bound.extensions[0]?.handlers.get("tool_call")?.[0];
 			expect(handler).toBeDefined();
