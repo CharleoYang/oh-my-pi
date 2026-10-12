@@ -52,7 +52,7 @@ export function getPermissionIntent(
 	const input = isRecord(args) ? args : {};
 	if (toolName === "bash") {
 		const command = stringProperty(input, "command")?.slice(0, 80);
-		return { toolName, title: command || toolName, cacheKey: toolName };
+		return { toolName, title: command || toolName, cacheKey: `bash:${JSON.stringify(input)}` };
 	}
 	if (toolName === "delete") {
 		const filePath = stringProperty(input, "path");
