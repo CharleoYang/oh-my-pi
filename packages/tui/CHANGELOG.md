@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed inline images inside tmux selecting Kitty graphics for unknown attached clients instead of probing SIXEL ([#15524](https://github.com/can1357/oh-my-pi/issues/15524)).
+
 ## [18.10.3] - 2026-10-12
 
 ### Changed
