@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed retry model fallback stopping at a fallback model whose provider is outside a subagent's `task.agentAccountPools` pool; that model is now skipped, and the next fallback model is tried ([#15423](https://github.com/can1357/oh-my-pi/issues/15423))
+
 ## [18.10.0] - 2026-10-12
 
 ### Added
