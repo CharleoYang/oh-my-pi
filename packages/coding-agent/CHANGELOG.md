@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- `omp install`/`omp plugin install`, `upgrade`, `uninstall`, and `doctor --fix` work for npm and Git plugins on machines without Bun installed (e.g. the standalone binary) instead of failing with `Executable not found in $PATH: "bun"` ([#15480](https://github.com/can1357/oh-my-pi/issues/15480))
+
 ## [18.10.2] - 2026-10-12
 
 ### Added
