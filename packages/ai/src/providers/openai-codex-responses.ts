@@ -82,6 +82,7 @@ import {
 	type CodexRequestOptions,
 	type InputItem,
 	type ReasoningConfig,
+	lowestCodexWireEffort,
 	type RequestBody,
 	resolveCodexResponsesLite,
 	sanitizeCodexCallId,
@@ -102,10 +103,10 @@ import { getOpenAICodexWebSocketEnvValue, isOpenAICodexWebSocketPreferred } from
 export { setCodexAttestationProvider } from "./openai-codex-attestation";
 export type { CodexAttestationProvider } from "./openai-codex-attestation";
 import {
-	getOpenAIEffortControlState,
-	releaseOpenAIEffortControlSession,
 	type OpenAIEffortControlState,
 	planStableOpenAIEffort,
+	releaseOpenAIEffortControlSession,
+	resolveOpenAIEffortControlState,
 } from "./openai-configuration-update";
 import type {
 	ResponseComputerToolCall,
@@ -150,6 +151,7 @@ import {
 	normalizeOpenAIPromptCacheKey,
 	populateResponsesUsageFromResponse,
 	promoteResponsesToolUseStopReason,
+	settleReasoningSummary,
 	type SequentialCutoffSummaryState,
 } from "./openai-shared";
 import { redactSensitiveInObject, transformMessages } from "./transform-messages";
@@ -495,6 +497,12 @@ interface CodexMetadataSessionState {
 interface CodexCompatibilityIdentity {
 	installationId: string;
 	sessionId: string;
+	/**
+	 * Session the backend derives prompt-cache affinity from, sent in every
+	 * session header: the parent conversation's for a side request
+	 * (`parentSessionId`), else `sessionId`. Turn metadata keeps `sessionId`.
+	 */
+	affinitySessionId?: string;
 	threadId: string;
 	windowId: string;
 	/** Header projection: identity fields only, never the Code Mode snapshot. */
@@ -633,6 +641,7 @@ function createCodexRequestMetadata(
 		parentTurnId?: string;
 		compaction?: CodexCompactionRequestContext;
 		toolNamespacesInfo?: unknown;
+		affinitySessionId?: string;
 	},
 ): CodexRequestMetadata {
 	if (options.startNewTurn || !session.turnId) {
@@ -696,6 +705,7 @@ function createCodexRequestMetadata(
 	clientMetadata[OPENAI_HEADERS.TURN_METADATA] = turnMetadataJson;
 	return {
 		...identity,
+		affinitySessionId: options.affinitySessionId,
 		turnId: session.turnId,
 		turnMetadataJson,
 		turnMetadataHeaderJson,
@@ -704,7 +714,7 @@ function createCodexRequestMetadata(
 }
 
 function applyCodexCompatibilityHeaders(headers: Headers, metadata: CodexCompatibilityIdentity): void {
-	headers.set(OPENAI_HEADERS.SCOPED_SESSION_ID, metadata.sessionId);
+	headers.set(OPENAI_HEADERS.SCOPED_SESSION_ID, metadata.affinitySessionId ?? metadata.sessionId);
 	headers.set(OPENAI_HEADERS.THREAD_ID, metadata.threadId);
 	headers.set(OPENAI_HEADERS.WINDOW_ID, metadata.windowId);
 	if (metadata.turnMetadataHeaderJson) {
@@ -1529,6 +1539,7 @@ function createCodexRequestContext(
 		parentTurnId: options?.parentTurnId,
 		compaction,
 		toolNamespacesInfo: options?.toolNamespacesInfo,
+		affinitySessionId: normalizeOpenAIPromptCacheKey(options?.parentSessionId),
 	});
 	transformedBody.client_metadata = requestMetadata.clientMetadata;
 	return {
@@ -1624,7 +1635,7 @@ export async function buildTransformedCodexRequestBody(
 
 /**
  * Keep the request-level effort byte-stable across a conversation and carry
- * later changes as `configuration_update` items (GPT-6 Astra). Requires a
+ * later changes as `configuration_update` items (GPT-6 family). Requires a
  * session id and provider session state to remember the baseline; without
  * them every request stands alone and sends its own effort.
  */
@@ -1639,8 +1650,17 @@ function applyCodexStableEffort(
 	const providerState = getCodexProviderSessionState(options?.providerSessionState);
 	const sessionId = normalizeOpenAIPromptCacheKey(options?.sessionId);
 	if (!providerState || !sessionId) return;
-	const state = getOpenAIEffortControlState(providerState.effortControls, `${model.id}\u0000${sessionId}`, sessionId);
-	body.reasoning = { ...body.reasoning, effort: planStableOpenAIEffort(state, body.input, effort) };
+	const state = resolveOpenAIEffortControlState(
+		providerState.effortControls,
+		id => `${model.id}\u0000${id}`,
+		sessionId,
+		normalizeOpenAIPromptCacheKey(options?.parentSessionId),
+	);
+	const lowest = options?.minimizeEffort ? lowestCodexWireEffort(model) : undefined;
+	body.reasoning = {
+		...body.reasoning,
+		effort: planStableOpenAIEffort(state, body.input, effort, lowest === "none" ? undefined : lowest),
+	};
 }
 
 async function openInitialCodexEventStream(
@@ -2577,6 +2597,7 @@ class CodexStreamProcessor {
 		if (entry?.block?.type !== "thinking") return;
 		for (const delta of this.runtime.takeSummaryDeltas(entry)) {
 			entry.block.thinking += delta;
+			entry.block.summary = true;
 			this.stream.push({
 				type: "thinking_delta",
 				contentIndex: entry.contentIndex,
@@ -2619,6 +2640,7 @@ class CodexStreamProcessor {
 				this.#sequentialCutoffSummaries ? this.runtime.cutoffSummaries : undefined,
 			);
 			block.thinkingSignature = JSON.stringify(item);
+			settleReasoningSummary(item, block);
 			stream.push({
 				type: "thinking_end",
 				contentIndex,
@@ -2644,11 +2666,17 @@ class CodexStreamProcessor {
 		}
 
 		if (item.type === "function_call") {
+			const partial = block?.type === "toolCall" ? block[kStreamingPartialJson] : undefined;
 			const toolCall: ToolCall = {
 				type: "toolCall",
 				id: encodeResponsesToolCallId(item.call_id, item.id),
 				name: item.name,
-				arguments: parseToolCallArguments(item.arguments),
+				// An empty terminal item falls back to what `.delta`/`.done` already delivered.
+				arguments: item.arguments
+					? parseToolCallArguments(item.arguments)
+					: block?.type === "toolCall" && !partial
+						? block.arguments
+						: parseToolCallArguments(partial),
 			};
 			item.arguments = replayableToolCallArguments(item.arguments, toolCall.arguments);
 			if (block?.type === "toolCall") {
@@ -3367,7 +3395,14 @@ export async function prewarmOpenAICodexResponses(
 	model: Model<"openai-codex-responses">,
 	options?: Pick<
 		OpenAICodexResponsesOptions,
-		"apiKey" | "headers" | "sessionId" | "signal" | "preferWebsockets" | "providerSessionState" | "responsesLite"
+		| "apiKey"
+		| "headers"
+		| "sessionId"
+		| "signal"
+		| "preferWebsockets"
+		| "providerSessionState"
+		| "responsesLite"
+		| "serviceTier"
 	>,
 ): Promise<void> {
 	const apiKey = options?.apiKey || getEnvApiKey(model.provider) || "";
@@ -3392,6 +3427,10 @@ export async function prewarmOpenAICodexResponses(
 	const codexClientVersion = CODEX_CLIENT_VERSION;
 	const requestIdentity = createCodexCompatibilityIdentity(metadataSession);
 	const attestation = await getCodexAttestationHeader(accountId);
+	const routedRequest: Pick<RequestBody, "model" | "service_tier"> = {
+		model: model.requestModelId ?? model.id,
+	};
+	applyOpenAIServiceTier(routedRequest, options?.serviceTier, model);
 	const headers = logger.time(
 		"prewarmCodex:createHeaders",
 		createCodexHeaders,
@@ -3406,6 +3445,7 @@ export async function prewarmOpenAICodexResponses(
 		responsesLite,
 		requestIdentity,
 		attestation,
+		routedRequest,
 	);
 	await logger.time(
 		"prewarmCodex:establishWs",
@@ -4888,8 +4928,11 @@ function createCodexHeaders(
 	// client by changing one header.
 	if (!headers.has("User-Agent")) headers.set("User-Agent", getTestCodexUserAgent() ?? USER_AGENT);
 	if (sessionId) {
-		headers.set(OPENAI_HEADERS.CONVERSATION_ID, sessionId);
-		headers.set(OPENAI_HEADERS.SESSION_ID, sessionId);
+		// The backend derives prompt-cache affinity from the session headers
+		// (codex-rs `responses_session_id`); a side request shares its parent's.
+		const affinitySessionId = requestMetadata?.affinitySessionId ?? sessionId;
+		headers.set(OPENAI_HEADERS.CONVERSATION_ID, affinitySessionId);
+		headers.set(OPENAI_HEADERS.SESSION_ID, affinitySessionId);
 		headers.set("x-client-request-id", sessionId);
 	} else {
 		headers.delete(OPENAI_HEADERS.CONVERSATION_ID);
