@@ -399,7 +399,7 @@ import { cfgExpandThinkingBlocks, cfgProseOnlyThinking } from "../session/settin
 import { cfgHideThinkingBlock } from "../session/settings";
 import { cfgCycleOrder, cfgModelRoles } from "../config/model-settings";
 import { cfgGoalContinuationModes, cfgGoalEnabled } from "../goals/settings";
-import { goalContinuationActivity, goalFromModeData } from "../goals/state";
+import { goalContinuationActivity, goalFromModeData, goalGuardFromModeData } from "../goals/state";
 import { cfgPlanDefaultOnStartup, cfgPlanEnabled } from "../plan-mode/settings";
 import { cfgStreamRedactPatterns } from "../stream/settings";
 import { cfgSttEnabled } from "../stt/settings";
@@ -1823,6 +1823,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			});
 		this.composer.setPreferences(preferences);
 		this.ui = this.composer.ui;
+		session.setGoalSubmissionAvailability(() => !this.#isShuttingDown && !this.#pendingSubmittedInput && this.editor.getText().trim().length === 0 && (this.editor.pendingImages?.length ?? 0) === 0 && !this.planModeEnabled && !this.planModePaused && !this.#goalOpenWorkAllBlocked());
 		this.editor = this.composer.editor;
 		this.editor.magicKeywordsEnabled = () => cfgMagicKeywordsEnabled.get(this.settings);
 		this.editor.placeholder = () => this.#composerHint();
@@ -2916,7 +2917,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#cancelGoalContinuation();
 		if (this.loopModeEnabled) return;
 		if (!this.onInputCallback) return;
-		if (!cfgGoalContinuationModes.get(this.session.settings).includes("interactive")) return;
+		if (!cfgGoalContinuationModes.get(this.session.settings).includes("interactive") && !this.session.getGoalModeState()?.continuationGuard) return;
 		if (this.planModeEnabled || this.planModePaused) return;
 		if (!this.goalModeEnabled || this.goalModePaused) return;
 		if (this.#goalSuppressNextContinuation) return;
@@ -2946,6 +2947,10 @@ export class InteractiveMode implements InteractiveModeContext {
 			const latestState = this.session.getGoalModeState();
 			if (!latestState?.enabled || latestState.goal.status !== "active") return;
 			if (this.#goalOpenWorkAllBlocked()) return;
+			if (latestState.continuationGuard) {
+				void this.session.promptCustomMessage({ customType: "goal-continuation", content: prompt, display: false }, { onPromptAdmitted: () => { this.#pendingGoalContinuationTurns++; } }).catch(error => this.showWarning(error instanceof Error ? error.message : String(error)));
+				return;
+			}
 			this.#pendingGoalContinuationTurns++;
 			this.onInputCallback(
 				this.startPendingSubmission({
@@ -4865,12 +4870,29 @@ export class InteractiveMode implements InteractiveModeContext {
 				await this.#exitGoalMode({ reason: "dropped", silent: true });
 				return;
 			}
+			if (event.state?.continuationGuard) {
+				if (event.state.mode === "exiting" && !this.session.isStreaming) {
+					await this.#exitGoalMode({ reason: "completed", silent: true });
+					return;
+				}
+				if (event.state.enabled && this.#goalModePreviousTools === undefined) {
+					this.#goalModePreviousTools = this.session.getEnabledToolNames();
+					await this.session.setActiveToolsByName([...new Set([...this.#goalModePreviousTools, "goal"])]);
+				} else if (!event.state.enabled && this.#goalModePreviousTools) {
+					await this.session.setActiveToolsByName(this.#goalModePreviousTools);
+					this.#goalModePreviousTools = undefined;
+				}
+			}
 			this.goalModeEnabled = event.state?.enabled === true;
 			this.goalModePaused = event.state?.enabled !== true && event.state?.goal?.status === "paused";
 			if (!event.state?.enabled) {
 				this.#cancelGoalContinuation();
 			}
 			this.#updateGoalModeStatus();
+			if (event.state?.continuationGuard && event.state.enabled && !this.session.isStreaming) {
+				this.#resetGoalContinuationSuppression();
+				this.#scheduleGoalContinuation();
+			}
 			return;
 		}
 		if (event.type !== "agent_end") {
@@ -5104,6 +5126,7 @@ export class InteractiveMode implements InteractiveModeContext {
 				enabled: sessionContext.mode === "goal",
 				mode: "active",
 				goal,
+				continuationGuard: goalGuardFromModeData(sessionContext.modeData),
 			});
 			const restored = await this.session.goalRuntime.onThreadResumed({
 				preserveActiveGoal: options?.preserveActiveGoal,

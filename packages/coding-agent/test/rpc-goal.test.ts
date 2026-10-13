@@ -479,6 +479,7 @@ describe("RpcGoalController continuation gate", () => {
 			setGoalModeState: (state: GoalModeState | undefined) => {
 				goalState = state;
 			},
+			setGoalSubmissionAvailability: (_check: () => boolean) => {},
 			getEnabledToolNames: () => [...tools],
 			setActiveToolsByName: async (names: string[]) => {
 				tools = [...names];

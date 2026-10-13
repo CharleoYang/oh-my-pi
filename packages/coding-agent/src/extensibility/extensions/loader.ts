@@ -21,6 +21,7 @@ import { hasFsCode, isEacces, isEnoent, logger } from "@oh-my-pi/pi-utils";
 import { type ExtensionModule, extensionModuleCapability } from "../../capability/extension-module";
 import { type Hook, hookCapability } from "../../capability/hook";
 import { isServiceTierFamily, isServiceTierForFamily } from "../../config/service-tier";
+import type { GoalGuard } from "../../goals/state";
 import { loadCapability } from "../../discovery";
 import { getExtensionNameFromPath } from "../../discovery/helpers";
 import type { ExecOptions } from "../../exec/exec";
@@ -100,6 +101,7 @@ export class ExtensionRuntimeNotInitializedError extends Error {
 export class ExtensionRuntime implements IExtensionRuntime {
 	flagValues = new Map<string, boolean | string>();
 	pendingProviderRegistrations: Array<{ name: string; config: ProviderConfig; sourceId: string }> = [];
+	goalGuardIds = new Set<string>();
 
 	registerProvider(name: string, config: ProviderConfig, sourceId: string): void {
 		this.pendingProviderRegistrations.push({ name, config, sourceId });
@@ -211,6 +213,14 @@ class ConcreteExtensionAPI implements ExtensionAPI, IExtensionRuntime {
 		const list = this.extension.handlers.get(event) ?? [];
 		list.push(handler);
 		this.extension.handlers.set(event, list);
+	}
+
+	registerGoalGuard(id: string, guard: GoalGuard): void {
+		if (!id.trim() || id !== id.trim() || typeof guard.beforeRun !== "function" || typeof guard.beforeComplete !== "function") throw new Error("Invalid Goal guard registration");
+		const ids = this.runtime.goalGuardIds ??= new Set<string>();
+		if (ids.has(id)) throw new Error(`Duplicate Goal guard: ${id}`);
+		ids.add(id);
+		(this.extension.goalGuards ??= new Map()).set(id, guard);
 	}
 
 	registerTool<TParams extends TSchema = TSchema, TDetails = unknown>(tool: ToolDefinition<TParams, TDetails>): void {

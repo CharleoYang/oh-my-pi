@@ -807,8 +807,8 @@ export class TurnRecovery {
 	}
 
 	/** Prompts after transient overlap with a prior agent run. */
-	promptAgentWithIdleRetry(messages: AgentMessage[], options?: { toolChoice?: ToolChoice }): Promise<void> {
-		return this.#promptAgentWithIdleRetry(messages, options);
+	promptAgentWithIdleRetry(messages: AgentMessage[], options?: { toolChoice?: ToolChoice }, submit?: () => Promise<boolean>): Promise<boolean> {
+		return this.#promptAgentWithIdleRetry(messages, options, submit);
 	}
 
 	/** Parses provider retry and rate-limit reset hints into a delay. */
@@ -3083,12 +3083,13 @@ export class TurnRecovery {
 		this.resolveRetry();
 	}
 
-	async #promptAgentWithIdleRetry(messages: AgentMessage[], options?: { toolChoice?: ToolChoice }): Promise<void> {
+	async #promptAgentWithIdleRetry(messages: AgentMessage[], options?: { toolChoice?: ToolChoice }, submit?: () => Promise<boolean>): Promise<boolean> {
 		const deadline = Date.now() + 30_000;
 		for (;;) {
 			try {
+				if (submit) return await submit();
 				await this.#host.agent.prompt(messages, options);
-				return;
+				return true;
 			} catch (err) {
 				if (!(err instanceof AgentBusyError)) {
 					throw err;

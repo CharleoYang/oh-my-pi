@@ -13,7 +13,8 @@ export interface YieldDispatcher<P> {
 export interface YieldQueueOptions {
 	isStreaming: () => boolean;
 	injectStreaming?(msg: AgentMessage): void;
-	injectIdle(messages: AgentMessage[]): Promise<void>;
+	/** True only after submission; false or a throw retains uncommitted entries for a later host flush. */
+	injectIdle(messages: AgentMessage[]): Promise<boolean>;
 	scheduleIdleFlush(run: () => Promise<void>): void;
 }
 
@@ -32,6 +33,9 @@ interface StoredEntry {
 }
 
 interface BuiltMessage {
+	kind: string;
+	dispatcher: StoredDispatcher;
+	settled: boolean;
 	message: AgentMessage;
 	entries: StoredEntry[];
 }
@@ -44,6 +48,7 @@ export class YieldQueue {
 	readonly #options: YieldQueueOptions;
 	readonly #dispatchers = new Map<string, StoredDispatcher>();
 	readonly #entries = new Map<string, StoredEntry[]>();
+	readonly #pendingMessages = new Set<BuiltMessage>();
 	#idleFlushPending = false;
 
 	constructor(options: YieldQueueOptions) {
@@ -60,8 +65,7 @@ export class YieldQueue {
 		return () => {
 			if (this.#dispatchers.get(kind) !== stored) return;
 			this.#dispatchers.delete(kind);
-			this.#rejectEntries(this.#entries.get(kind) ?? [], new Error(`Yield queue dispatcher removed: ${kind}`));
-			this.#entries.delete(kind);
+			this.clear(kind);
 		};
 	}
 
@@ -160,19 +164,34 @@ export class YieldQueue {
 		if (mode === "idle" && idleMessages.length > 0) {
 			for (const item of idleMessages) this.#attachEntrySettlement(item);
 			try {
-				await this.#options.injectIdle(idleMessages.map(item => item.message));
-				for (const item of idleMessages) {
-					(item.message as AgentMessage & { [ASIDE_MESSAGE_COMMIT]?: () => void })[ASIDE_MESSAGE_COMMIT]?.();
+				const submitted = await this.#options.injectIdle(idleMessages.map(item => item.message));
+				if (submitted) {
+					for (const item of idleMessages) {
+						(item.message as AgentMessage & { [ASIDE_MESSAGE_COMMIT]?: () => void })[ASIDE_MESSAGE_COMMIT]?.();
+					}
+				} else {
+					this.#restoreIdleMessages(idleMessages);
 				}
 			} catch (error) {
-				const dispatchError = error instanceof Error ? error : new Error(String(error));
-				for (const item of idleMessages) {
-					(item.message as AgentMessage & { [ASIDE_MESSAGE_DISCARD]?: (error: Error) => void })[
-						ASIDE_MESSAGE_DISCARD
-					]?.(dispatchError);
-				}
+				this.#restoreIdleMessages(idleMessages);
 				logger.warn("Yield queue idle dispatch failed", { error: formatError(error) });
 			}
+		}
+	}
+
+	#restoreIdleMessages(messages: BuiltMessage[]): void {
+		for (const item of messages) {
+			if (item.settled) continue;
+			// Invalidate hooks from the rejected attempt before returning its original receipts.
+			item.settled = true;
+			this.#pendingMessages.delete(item);
+			if (this.#dispatchers.get(item.kind) !== item.dispatcher) {
+				this.#rejectEntries(item.entries, new Error(`Yield queue dispatcher removed: ${item.kind}`));
+				continue;
+			}
+			const queued = this.#entries.get(item.kind);
+			if (queued) item.entries.push(...queued);
+			this.#entries.set(item.kind, item.entries);
 		}
 	}
 
@@ -203,6 +222,12 @@ export class YieldQueue {
 	 *  any pending idle-flush for other kinds intact); otherwise drop everything. */
 	clear(kind?: string): void {
 		const error = new Error("Yield queue entry cleared before dispatch");
+		for (const item of this.#pendingMessages) {
+			if (kind !== undefined && item.kind !== kind) continue;
+			item.settled = true;
+			this.#pendingMessages.delete(item);
+			this.#rejectEntries(item.entries, error);
+		}
 		if (kind !== undefined) {
 			this.#rejectEntries(this.#entries.get(kind) ?? [], error);
 			this.#entries.delete(kind);
@@ -267,7 +292,7 @@ export class YieldQueue {
 				this.#rejectEntries(survivors, new Error(`Yield queue dispatcher skipped entry: ${kind}`));
 				return null;
 			}
-			return { message, entries: survivors };
+			return { kind, dispatcher, settled: false, message, entries: survivors };
 		} catch (error) {
 			const buildError = error instanceof Error ? error : new Error(String(error));
 			this.#rejectEntries(survivors, buildError);
@@ -277,21 +302,23 @@ export class YieldQueue {
 	}
 
 	#attachEntrySettlement(built: BuiltMessage): void {
-		let settled = false;
+		this.#pendingMessages.add(built);
 		Object.defineProperties(built.message, {
 			[ASIDE_MESSAGE_COMMIT]: {
 				configurable: true,
 				value: () => {
-					if (settled) return;
-					settled = true;
+					if (built.settled) return;
+					built.settled = true;
+					this.#pendingMessages.delete(built);
 					this.#resolveEntries(built.entries);
 				},
 			},
 			[ASIDE_MESSAGE_DISCARD]: {
 				configurable: true,
 				value: (error: Error) => {
-					if (settled) return;
-					settled = true;
+					if (built.settled) return;
+					built.settled = true;
+					this.#pendingMessages.delete(built);
 					this.#rejectEntries(built.entries, error);
 				},
 			},

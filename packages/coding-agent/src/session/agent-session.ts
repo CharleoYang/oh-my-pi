@@ -165,7 +165,8 @@ import type { Skill, SkillWarning } from "../extensibility/skills";
 import { expandSlashCommand, type FileSlashCommand, loadSlashCommands } from "../extensibility/slash-commands";
 import { normalizeToolEventInput, resolveToolEventInput } from "../extensibility/tool-event-input";
 import { GoalRuntime } from "../goals/runtime";
-import type { GoalModeState, GoalTokenUsage } from "../goals/state";
+import { GoalAdmission } from "../goals/admission";
+import { type GoalModeState, type GoalTokenUsage, goalFromModeData, goalGuardFromModeData, preparedGoalRunId } from "../goals/state";
 import type { HindsightSessionState } from "../hindsight/state";
 import { InternalUrlRouter, type LocalProtocolOptions } from "../internal-urls";
 import { type ChainJudge, hasNativeJudge, journalJudgmentUsage, resolveJudge, sharedJudgmentCache } from "../judgment";
@@ -887,6 +888,8 @@ export class AgentSession implements SettingsScope {
 	#vibeModeState: VibeModeState | undefined;
 	#goalModeState: GoalModeState | undefined;
 	#goalRuntime: GoalRuntime;
+	#goalAdmission: GoalAdmission;
+	#goalSubmissionAvailable: (() => boolean) | undefined;
 	readonly #advisors: SessionAdvisors;
 	/** Resolves once the resume-time advisor spend backfill settles. */
 	#advisorCostRestore: Promise<void> = Promise.resolve();
@@ -1122,7 +1125,8 @@ export class AgentSession implements SettingsScope {
 			const resolve = this.#resolveSessionTransition;
 			this.#sessionTransitionSettled = undefined;
 			this.#resolveSessionTransition = undefined;
-			resolve?.();
+			try { this.#restoreGuardedGoalFromBranch(); }
+			finally { resolve?.(); }
 		},
 	};
 	#promptSequence = 0;
@@ -1394,7 +1398,7 @@ export class AgentSession implements SettingsScope {
 					return;
 				}
 				observation = this.#startTurnObservation(records);
-				return this.agent.prompt(records);
+				return this.#submitGoalPrompt(records);
 			})
 			.catch(error => {
 				if (error instanceof AgentBusyError) {
@@ -1969,10 +1973,10 @@ export class AgentSession implements SettingsScope {
 			isStreaming: () => this.isStreaming,
 			injectIdle: async messages => {
 				const first = messages[0];
-				if (!first) return;
+				if (!first) return false;
 				this.#beginInFlight();
 				try {
-					await this.agent.prompt(messages.length === 1 ? first : messages);
+					return await this.#submitGoalPrompt(messages.length === 1 ? first : messages);
 				} finally {
 					this.#endInFlight();
 				}
@@ -2191,20 +2195,33 @@ export class AgentSession implements SettingsScope {
 		this.#modelMentions.syncFromBranch();
 		this.#goalRuntime = new GoalRuntime({
 			getState: () => this.#goalModeState,
-			setState: state => {
-				this.#goalModeState = state;
-			},
+			setState: state => this.setGoalModeState(state),
 			getCurrentUsage: () => this.#goalUsage(),
 			emit: event => {
 				if (event.type === "goal_updated") {
 					return this.#emitSessionEvent({ type: "goal_updated", goal: event.goal, state: event.state });
 				}
 			},
+			beforeComplete: () => this.#goalAdmission.beforeComplete(),
+			assertOutsideGuard: () => this.#goalAdmission.assertOutsideGuard(),
+			captureControlFence: request => {
+				const generation = this.#sessionGeneration;
+				const promptGeneration = this.#promptGeneration;
+				const sessionId = this.sessionManager.getSessionId();
+				const guardId = request?.op === "create" ? request.continuationGuard : this.#goalModeState?.continuationGuard;
+				const guard = guardId ? this.#extensionRunner?.getGoalGuard(guardId) : undefined;
+				return () => {
+					if (generation !== this.#sessionGeneration || promptGeneration !== this.#promptGeneration || sessionId !== this.sessionManager.getSessionId() || this.#isDisposed || this.isSessionTransitioning) throw new Error("Native Goal control became stale during session transition or cancellation");
+					if (request && request.op !== "create" && this.#goalModeState?.goal.id !== request.expectedGoalId) throw new Error("Goal identity mismatch");
+					if (guardId && request?.op !== "pause" && request?.op !== "drop" && guard !== this.#extensionRunner?.getGoalGuard(guardId)) throw new Error("Goal guard generation changed during control");
+				};
+			},
+			guardAvailable: id => Boolean(this.#extensionRunner?.getGoalGuard(id)),
 			persist: (mode, state) => {
 				if (mode === "none") {
 					this.sessionManager.appendModeChange("none");
 				} else if (state) {
-					this.sessionManager.appendModeChange(mode, { goal: state.goal });
+					this.sessionManager.appendModeChange(mode, { goal: state.goal, ...(state.continuationGuard ? { continuationGuard: state.continuationGuard } : {}) });
 				}
 			},
 			sendHiddenMessage: async message => {
@@ -2219,6 +2236,56 @@ export class AgentSession implements SettingsScope {
 				);
 			},
 		});
+		this.#goalAdmission = new GoalAdmission({
+			getState: () => this.#goalModeState,
+			getSessionId: () => this.sessionManager.getSessionId(),
+			getGeneration: () => this.#sessionGeneration + this.#promptGeneration,
+			getGuard: id => this.#extensionRunner?.getGoalGuard(id),
+			// Queue ownership is checked per submission: only the queued-message drain may consume it.
+			isAvailable: () => !this.agent.state.isStreaming && !this.#isDisposed && !this.#abortInProgress && !this.isSessionTransitioning,
+			pause: async reason => {
+				this.sessionManager.appendCustomEntry("goal-guard-blocked", { goalId: this.#goalModeState?.goal.id, reason });
+				await this.#goalRuntime.pauseGoal();
+			},
+			recordRunIntent: async context => {
+				this.sessionManager.appendCustomEntry("goal-run-intent", { goalId: context.goal.goal.id, continuationGuard: context.goal.continuationGuard, sessionId: context.sessionId, runId: context.runId });
+				await this.sessionManager.flush();
+			},
+			recordRun: context => {
+				// Reject known persistence failures before publishing submitted proof. The append
+				// and native dispatch share one synchronous boundary; never flush/await afterward.
+				this.sessionManager.flushSync();
+				this.sessionManager.appendCustomEntry("goal-run", { goalId: context.goal.goal.id, continuationGuard: context.goal.continuationGuard, sessionId: context.sessionId, runId: context.runId });
+			},
+			recordPreparedRun: async context => {
+				if (preparedGoalRunId(this.sessionManager.getBranch(), context.goal.goal.id, context.goal.continuationGuard!, context.sessionId) !== context.runId) {
+					this.sessionManager.appendCustomEntry("goal-admission-prepared", { goalId: context.goal.goal.id, continuationGuard: context.goal.continuationGuard, sessionId: context.sessionId, runId: context.runId });
+				}
+				await this.sessionManager.ensureOnDisk();
+				await this.sessionManager.flush();
+			},
+			getPreparedRunId: (goalId, guardId) => preparedGoalRunId(this.sessionManager.getBranch(), goalId, guardId, this.sessionManager.getSessionId()),
+			retirePreparedRun: (goalId, continuationGuard, sessionId, runId) => {
+				this.sessionManager.appendCustomEntry("goal-admission-retired", { goalId, continuationGuard, sessionId, runId });
+				this.sessionManager.flushSync();
+			},
+			getLatestRunId: (goalId, guardId) => this.#latestGoalRunId(goalId, guardId),
+		});
+		this.#extensionRunner?.bindGoalPort({
+			getState: () => this.#goalRuntime.getState(),
+			getLatestRunId: () => this.#latestGoalRunId(),
+			getPreparedRunId: () => this.#isDisposed || this.isSessionTransitioning ? undefined : this.#goalAdmission.getPreparedRunId(),
+			retirePreparedRun: runId => {
+				if (this.#isDisposed || this.isSessionTransitioning) throw new Error("Native Goal control is unavailable during session transition or disposal");
+				this.#goalAdmission.retirePreparedRun(runId);
+			},
+			control: async request => {
+				if (this.#isDisposed || this.isSessionTransitioning) throw new Error("Native Goal control is unavailable during session transition or disposal");
+				if (request.op === "create" && !this.#extensionRunner?.getGoalGuard(request.continuationGuard)) throw new Error(`Missing Goal guard: ${request.continuationGuard}`);
+				return this.#goalRuntime.control(request);
+			},
+		});
+		this.#restoreGuardedGoalFromBranch();
 		this.#cancelExitRecorder = postmortem.register(`agent-session:${this.sessionManager.getSessionId()}`, reason => {
 			this.#recordSessionExit(reason);
 		});
@@ -4656,7 +4723,13 @@ export class AgentSession implements SettingsScope {
 			}
 			for (;;) {
 				try {
-					await this.agent.continue(signal);
+					const submitted = await this.#goalAdmission.submit(async additionalContext => {
+						if (additionalContext) this.agent.appendMessage({ role: "custom", customType: "goal-guard-context", content: additionalContext, display: false, timestamp: Date.now() });
+						await this.agent.continue(signal);
+					}, () => !signal.aborted &&
+						(this.queuedMessageCount === 0 || (request.options.source === "queued-message-drain" && this.#pendingNextTurnMessages.length === 0)) &&
+						(this.#goalSubmissionAvailable?.() ?? true), true);
+					if (!submitted) return { status: "skipped", reason: "session-unavailable" };
 					return { status: "completed" };
 				} catch (error) {
 					if (!(error instanceof AgentBusyError)) throw error;
@@ -5301,6 +5374,7 @@ export class AgentSession implements SettingsScope {
 
 	#beginSessionTransition(): Disposable {
 		if (this.#sessionTransitionDepth++ === 0) {
+			this.#goalAdmission.cancel();
 			const settled = Promise.withResolvers<void>();
 			this.#sessionTransitionSettled = settled.promise;
 			this.#resolveSessionTransition = settled.resolve;
@@ -5496,6 +5570,7 @@ export class AgentSession implements SettingsScope {
 	 */
 	beginDispose(): void {
 		this.#isDisposed = true;
+		this.#goalAdmission.cancel();
 		for (const dispose of this.#disposers.splice(0)) dispose();
 		this.#modelDiscoveryAbortController.abort();
 		this.#queuedMessageDrainBlocked = false;
@@ -6749,12 +6824,64 @@ export class AgentSession implements SettingsScope {
 		}
 	}
 
+	#restoreGuardedGoalFromBranch(): void {
+		const context = this.sessionManager.buildSessionContext();
+		const continuationGuard = goalGuardFromModeData(context.modeData);
+		if (!this.#goalModeState?.continuationGuard && !continuationGuard) return;
+		this.#goalAdmission.cancel();
+		this.#goalRuntime.clearAccounting();
+		const goal = context.mode === "goal" || context.mode === "goal_paused" ? goalFromModeData(context.modeData) : undefined;
+		let state: GoalModeState | undefined;
+		if (goal) {
+			state = { goal, continuationGuard, enabled: context.mode === "goal" && goal.status !== "complete", mode: goal.status === "complete" ? "exiting" : "active", reason: goal.status === "complete" ? "completed" : undefined };
+			if (continuationGuard && !this.#extensionRunner?.getGoalGuard(continuationGuard)) {
+				state.enabled = false;
+				state.mode = "active";
+				state.goal.status = "paused";
+				this.sessionManager.appendModeChange("goal_paused", { goal: state.goal, continuationGuard });
+				this.sessionManager.appendCustomEntry("goal-guard-blocked", { goalId: goal.id, reason: `Missing Goal guard: ${continuationGuard}` });
+			} else if (continuationGuard && state.enabled) {
+				const latestAdmission = this.sessionManager.getBranch().findLast(entry => {
+					if (entry.type !== "custom" || (entry.customType !== "goal-run" && entry.customType !== "goal-admission-prepared") || !entry.data || typeof entry.data !== "object") return false;
+					const data = entry.data as Record<string, unknown>;
+					return data.goalId === goal.id && data.continuationGuard === continuationGuard && data.sessionId === this.sessionManager.getSessionId();
+				});
+				if (latestAdmission?.type === "custom" && latestAdmission.customType === "goal-run") {
+					// A submitted receipt can survive a failed acknowledgement or a crash before execution.
+					// Never automatically replay it; explicit resume must re-enter the trusted guard.
+					state.enabled = false;
+					state.goal.status = "paused";
+					this.sessionManager.appendModeChange("goal_paused", { goal: state.goal, continuationGuard });
+					this.sessionManager.appendCustomEntry("goal-guard-blocked", { goalId: goal.id, reason: "Submitted Goal admission requires reconciliation after session recovery" });
+				}
+			}
+		}
+		this.setGoalModeState(state);
+		void this.#emitSessionEvent({ type: "goal_updated", goal: state?.goal ?? null, state });
+	}
+
 	getGoalModeState(): GoalModeState | undefined {
 		return this.#goalModeState;
 	}
 
 	setGoalModeState(state: GoalModeState | undefined): void {
+		if (this.#goalModeState?.goal.id !== state?.goal.id || !state?.enabled || state.goal.status !== "active") this.#goalAdmission?.cancel();
 		this.#goalModeState = state;
+	}
+
+	/** Host continuation policy/input fencing is read again at native submission, after guard awaits. */
+	setGoalSubmissionAvailability(check: () => boolean): void {
+		this.#goalSubmissionAvailable = check;
+	}
+
+	async #submitGoalPrompt(messages: AgentMessage | AgentMessage[], options?: { toolChoice?: ToolChoice }, onSubmitted?: () => void): Promise<boolean> {
+		const continuation = Array.isArray(messages) ? messages.some(message => message.role === "custom" && message.customType === "goal-continuation") : messages.role === "custom" && messages.customType === "goal-continuation";
+		return this.#goalAdmission.submit(async additionalContext => {
+			let records = messages;
+			if (additionalContext) records = [...(Array.isArray(messages) ? messages : [messages]), { role: "custom", customType: "goal-guard-context", content: additionalContext, display: false, timestamp: Date.now() }];
+			onSubmitted?.();
+			await this.agent.prompt(records, options);
+		}, () => this.queuedMessageCount === 0 && (!continuation || (this.#goalSubmissionAvailable?.() ?? true)));
 	}
 
 	getVibeModeState(): VibeModeState | undefined {
@@ -7858,7 +7985,7 @@ export class AgentSession implements SettingsScope {
 		const setupAbort = new AbortController();
 		this.#promptSetupAbortController = setupAbort;
 		try {
-			options?.onPromptAdmitted?.();
+			if (!this.#goalModeState?.continuationGuard) options?.onPromptAdmitted?.();
 			await this.#recovery.maybeRestoreRetryFallbackPrimary();
 			if (!(await this.#runUsageAwarePreflightForNextModelCall())) return false;
 			// Flush any pending bash messages before the new prompt
@@ -8058,7 +8185,8 @@ export class AgentSession implements SettingsScope {
 				this.#planReferenceSent = true;
 			}
 			try {
-				await this.#recovery.promptAgentWithIdleRetry(messages, agentPromptOptions);
+				const submitted = await this.#recovery.promptAgentWithIdleRetry(messages, agentPromptOptions, () => this.#submitGoalPrompt(messages, agentPromptOptions, this.#goalModeState?.continuationGuard ? options?.onPromptAdmitted : undefined));
+				if (!submitted) return false;
 			} finally {
 				this.#stats.setPendingSnapshot(undefined);
 			}
@@ -8108,6 +8236,14 @@ export class AgentSession implements SettingsScope {
 		}
 	}
 
+	#latestGoalRunId(goalId = this.#goalModeState?.goal.id, guardId = this.#goalModeState?.continuationGuard): string | undefined {
+		if (this.#isDisposed || this.isSessionTransitioning || !goalId || !guardId || goalId !== this.#goalModeState?.goal.id || guardId !== this.#goalModeState?.continuationGuard) return undefined;
+		const entry = this.sessionManager.getBranch().findLast(entry => entry.type === "custom" && entry.customType === "goal-run");
+		if (entry?.type !== "custom" || !entry.data || typeof entry.data !== "object") return undefined;
+		const data = entry.data as Record<string, unknown>;
+		return data.goalId === goalId && data.continuationGuard === guardId && data.sessionId === this.sessionManager.getSessionId() && typeof data.runId === "string" && data.runId.trim() ? data.runId : undefined;
+	}
+
 	#createCommandContext(): ExtensionCommandContext {
 		if (this.#extensionRunner) {
 			return this.#extensionRunner.createCommandContext();
@@ -8116,6 +8252,16 @@ export class AgentSession implements SettingsScope {
 		return {
 			ui: noOpUIContext,
 			mode: "print",
+			goal: {
+				getState: () => this.#goalRuntime.getState(),
+				getLatestRunId: () => this.#latestGoalRunId(),
+				getPreparedRunId: () => this.#isDisposed || this.isSessionTransitioning ? undefined : this.#goalAdmission.getPreparedRunId(),
+				retirePreparedRun: runId => {
+					if (this.#isDisposed || this.isSessionTransitioning) throw new Error("Native Goal control is unavailable during session transition or disposal");
+					this.#goalAdmission.retirePreparedRun(runId);
+				},
+				control: request => this.#goalRuntime.control(request),
+			},
 			hasUI: false,
 			cwd: this.sessionManager.getCwd(),
 			sessionManager: this.sessionManager,
@@ -8485,8 +8631,11 @@ export class AgentSession implements SettingsScope {
 					this.agent.hasQueuedMessages()
 				);
 			},
-			onSkip: () => {
+			onSkip: reason => {
 				this.#queuedMessageDrainScheduled = false;
+				if (reason === "session-unavailable" || reason === "post-restore-unavailable") {
+					this.#queuedMessageDrainBlocked = this.agent.hasQueuedMessages();
+				}
 			},
 			onError: () => {
 				this.#queuedMessageDrainScheduled = false;
@@ -8637,7 +8786,7 @@ export class AgentSession implements SettingsScope {
 				this.#resetPromptMaintenanceState();
 			}
 			this.#recovery.setAcceptTerminalEmptyStop(acceptTerminalEmptyStop);
-			await this.agent.prompt(message);
+			if (!(await this.#submitGoalPrompt(message))) return false;
 			await this.#waitForPostPromptRecovery();
 			return true;
 		} finally {
@@ -9717,6 +9866,7 @@ export class AgentSession implements SettingsScope {
 		// leave any queued steer/follow-up visible for the user rather than
 		// auto-starting a fresh turn during cleanup.
 		this.#abortInProgress = true;
+		this.#goalAdmission.cancel();
 		try {
 			this.#titleGenerationAbortController.abort();
 			if (!this.#isDisposed) this.#titleGenerationAbortController = new AbortController();

@@ -1,9 +1,10 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { escapeXmlText, prompt, Snowflake } from "@oh-my-pi/pi-utils";
 import goalBudgetLimitPrompt from "../prompts/goals/goal-budget-limit.md" with { type: "text" };
 import goalContinuationPrompt from "../prompts/goals/goal-continuation.md" with { type: "text" };
 import goalModeActivePrompt from "../prompts/goals/goal-mode-active.md" with { type: "text" };
 import type { Goal } from "@oh-my-pi/pi-tui/tools/goal";
-import type { GoalBudgetSteering, GoalModeState, GoalRuntimeEvent, GoalTokenUsage } from "./state";
+import { type GoalBudgetSteering, type GoalControlRequest, type GoalModeState, type GoalRuntimeEvent, type GoalSnapshot, type GoalTokenUsage, goalSnapshot } from "./state";
 
 export interface GoalRuntimeHost {
 	getState(): GoalModeState | undefined;
@@ -11,6 +12,10 @@ export interface GoalRuntimeHost {
 	getCurrentUsage(): GoalTokenUsage;
 	emit(event: GoalRuntimeEvent): void | Promise<void>;
 	persist(mode: "goal" | "goal_paused" | "none", state?: GoalModeState): void;
+	beforeComplete?(): Promise<void>;
+	assertOutsideGuard?(): void;
+	guardAvailable?(id: string): boolean;
+	captureControlFence?(request?: GoalControlRequest): () => void;
 	sendHiddenMessage(message: {
 		customType: string;
 		content: string;
@@ -121,10 +126,43 @@ export class GoalRuntime {
 	#wallClock: GoalWallClockSnapshot;
 	#budgetReportedFor: string | undefined;
 	#accountingTail: Promise<void> = Promise.resolve();
+	readonly #controlFence = new AsyncLocalStorage<{ check?: () => void; closed: boolean }>();
 
 	constructor(host: GoalRuntimeHost) {
 		this.#host = host;
 		this.#wallClock = { lastAccountedAt: this.#now() };
+	}
+
+	getState(): GoalSnapshot | undefined {
+		return goalSnapshot(this.#host.getState());
+	}
+
+	#assertGoal(expectedGoalId?: string): void {
+		if (expectedGoalId !== undefined && this.#host.getState()?.goal.id !== expectedGoalId) throw new Error("Goal identity mismatch");
+	}
+
+	async control(request: GoalControlRequest): Promise<GoalSnapshot | undefined> {
+		this.#host.assertOutsideGuard?.();
+		const scope = { check: this.#host.captureControlFence?.(request), closed: false };
+		try { return await this.#controlFence.run(scope, () => this.#control(request)); }
+		finally { scope.closed = true; }
+	}
+
+	async #control(request: GoalControlRequest): Promise<GoalSnapshot | undefined> {
+		if (request.op === "create") {
+			if (request.paused !== true || !request.continuationGuard?.trim()) throw new Error("Guarded Goal must be created paused with a guard identity");
+			await this.createGoal(request);
+		} else {
+			if (!request.expectedGoalId) throw new Error("expectedGoalId is required");
+			switch (request.op) {
+				case "pause": await this.pauseGoal(request.expectedGoalId); break;
+				case "resume": await this.resumeGoal(request.expectedGoalId); break;
+				case "complete": await this.completeGoalFromTool(request.expectedGoalId); break;
+				case "drop": await this.dropGoal(request.expectedGoalId); break;
+				default: throw new Error("Unknown Goal control operation");
+			}
+		}
+		return this.getState();
 	}
 
 	get snapshot(): GoalRuntimeSnapshot {
@@ -155,6 +193,8 @@ export class GoalRuntime {
 		);
 		await previous.catch(() => {});
 		try {
+			const scope = this.#controlFence.getStore();
+			if (scope && !scope.closed) scope.check?.();
 			return await fn();
 		} finally {
 			resolve();
@@ -170,6 +210,8 @@ export class GoalRuntime {
 		state: GoalModeState | undefined,
 		options?: { persist?: "goal" | "goal_paused" | "none"; emit?: boolean },
 	): Promise<void> {
+		const scope = this.#controlFence.getStore();
+		if (scope && !scope.closed) scope.check?.();
 		this.#host.setState(state ? cloneState(state) : undefined);
 		if (options?.persist) {
 			this.#host.persist(options.persist, state);
@@ -239,6 +281,7 @@ export class GoalRuntime {
 		const currentUsage = options?.currentUsage;
 		await this.flushUsage("suppressed", typeof currentUsage === "function" ? currentUsage() : currentUsage);
 		this.#turnSnapshot = undefined;
+		if (this.#host.getState()?.continuationGuard) this.#clearActiveAccounting();
 	}
 
 	async onTaskAborted(options?: { reason?: "interrupted" | "internal" }): Promise<void> {
@@ -267,8 +310,12 @@ export class GoalRuntime {
 	async onThreadResumed(options?: { preserveActiveGoal?: boolean }): Promise<GoalModeState | undefined> {
 		const state = this.#getStateClone();
 		if (!state) return undefined;
+		if (state.continuationGuard && !this.#host.guardAvailable?.(state.continuationGuard)) {
+			return await this.pauseGoal(state.goal.id);
+		}
 		if (options?.preserveActiveGoal && state.enabled && state.goal.status === "active") {
-			this.#markActiveAccounting(state.goal, true);
+			if (state.continuationGuard) this.#clearActiveAccounting();
+			else this.#markActiveAccounting(state.goal, true);
 			await this.#commitState(state, { emit: true });
 			return state;
 		}
@@ -281,7 +328,7 @@ export class GoalRuntime {
 			await this.#commitState(state, { persist: "goal_paused" });
 			return state;
 		}
-		if (state.enabled && isAccountingStatus(state.goal)) {
+		if (state.enabled && isAccountingStatus(state.goal) && !state.continuationGuard) {
 			this.#markActiveAccounting(state.goal);
 		} else {
 			this.#clearActiveAccounting();
@@ -308,7 +355,7 @@ export class GoalRuntime {
 			} else if (state.goal.status === "budget-limited") {
 				state.goal.status = "active";
 				state.enabled = true;
-				this.#markActiveAccounting(state.goal);
+				if (!state.continuationGuard || this.#turnSnapshot) this.#markActiveAccounting(state.goal);
 			}
 			await this.#commitState(state, { persist: state.enabled ? "goal" : "goal_paused" });
 			if (shouldSteer) {
@@ -390,7 +437,7 @@ export class GoalRuntime {
 		return { enabled: true, mode: "active", goal };
 	}
 
-	async createGoal(input: { objective: string; tokenBudget?: number }): Promise<GoalModeState> {
+	async createGoal(input: { objective: string; tokenBudget?: number; continuationGuard?: string; paused?: true }): Promise<GoalModeState> {
 		const objective = input.objective.trim();
 		if (!objective) throw new Error("objective is required when op=create");
 		validateTokenBudget(input.tokenBudget);
@@ -400,9 +447,16 @@ export class GoalRuntime {
 				throw new Error("cannot create a new goal because this session already has a goal");
 			}
 			const state = this.#createGoalState(objective, input.tokenBudget);
+			state.continuationGuard = input.continuationGuard;
 			this.#budgetReportedFor = undefined;
-			this.#markActiveAccounting(state.goal);
-			await this.#commitState(state, { persist: "goal" });
+			if (input.paused) {
+				state.enabled = false;
+				state.goal.status = "paused";
+				this.#clearActiveAccounting();
+			} else {
+				this.#markActiveAccounting(state.goal);
+			}
+			await this.#commitState(state, { persist: input.paused ? "goal_paused" : "goal" });
 			return state;
 		});
 	}
@@ -413,6 +467,7 @@ export class GoalRuntime {
 		validateTokenBudget(input.tokenBudget);
 		return await this.#withAccounting(async () => {
 			const existing = this.#host.getState();
+			if (existing?.continuationGuard) throw new Error("A guarded Goal cannot be replaced by the model");
 			if (!existing?.enabled || !isAccountingStatus(existing.goal)) {
 				throw new Error("cannot replace goal because no goal is active");
 			}
@@ -425,10 +480,13 @@ export class GoalRuntime {
 		});
 	}
 
-	async resumeGoal(): Promise<GoalModeState> {
+	async resumeGoal(expectedGoalId?: string): Promise<GoalModeState> {
 		return await this.#withAccounting(async () => {
+			this.#assertGoal(expectedGoalId);
 			const state = this.#getStateClone();
 			if (!state?.goal) throw new Error("No paused goal.");
+			if (state.continuationGuard && !this.#host.guardAvailable?.(state.continuationGuard)) throw new Error("Goal continuation guard is unavailable");
+			if (state.continuationGuard && state.goal.tokenBudget !== undefined && state.goal.tokensUsed >= state.goal.tokenBudget) throw new Error("Goal token budget is exhausted");
 			if (state.goal.status === "complete") throw new Error("Goal is already complete.");
 			state.enabled = true;
 			state.mode = "active";
@@ -436,15 +494,18 @@ export class GoalRuntime {
 			state.goal.status = "active";
 			state.goal.updatedAt = this.#now();
 			this.#budgetReportedFor = undefined;
-			this.#markActiveAccounting(state.goal);
+			if (state.continuationGuard && !this.#turnSnapshot) this.#clearActiveAccounting();
+			else this.#markActiveAccounting(state.goal);
 			await this.#commitState(state, { persist: "goal" });
 			return state;
 		});
 	}
 
-	async pauseGoal(): Promise<GoalModeState | undefined> {
+	async pauseGoal(expectedGoalId?: string): Promise<GoalModeState | undefined> {
 		return await this.#withAccounting(async () => {
+			this.#assertGoal(expectedGoalId);
 			await this.#flushUsageLocked("suppressed");
+			this.#assertGoal(expectedGoalId);
 			const state = this.#getStateClone();
 			if (!state?.goal) return undefined;
 			state.enabled = false;
@@ -461,9 +522,11 @@ export class GoalRuntime {
 		});
 	}
 
-	async dropGoal(): Promise<Goal | undefined> {
+	async dropGoal(expectedGoalId?: string): Promise<Goal | undefined> {
 		return await this.#withAccounting(async () => {
+			this.#assertGoal(expectedGoalId);
 			await this.#flushUsageLocked("suppressed");
+			this.#assertGoal(expectedGoalId);
 			const state = this.#getStateClone();
 			if (!state?.goal) return undefined;
 			const dropped = { ...state.goal, status: "dropped" as const, updatedAt: this.#now() };
@@ -479,9 +542,19 @@ export class GoalRuntime {
 		});
 	}
 
-	async completeGoalFromTool(): Promise<Goal> {
+	async completeGoalFromTool(expectedGoalId?: string): Promise<Goal> {
+		const goalId = expectedGoalId ?? this.#host.getState()?.goal.id;
+		this.#assertGoal(goalId);
+		const completeFence = this.#host.getState()?.continuationGuard ? this.#host.captureControlFence?.() : undefined;
+		if (this.#host.getState()?.continuationGuard) {
+			if (!this.#host.beforeComplete) throw new Error("Goal completion guard is unavailable");
+			await this.#host.beforeComplete();
+		}
 		return await this.#withAccounting(async () => {
+			this.#assertGoal(goalId);
 			await this.#flushUsageLocked("suppressed");
+			this.#assertGoal(goalId);
+			completeFence?.();
 			const state = this.#getStateClone();
 			if (!state?.goal) {
 				throw new Error("cannot complete goal because no goal is active");

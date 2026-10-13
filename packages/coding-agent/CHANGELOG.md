@@ -2,6 +2,18 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Added trusted extension Goal controls and generation-scoped continuation guards, with immutable snapshots, durable guard/run identity, and shared native TUI/RPC submission admission, wait reservations and cancellation fencing. A trusted guard may return `allow.resumeRunId` only to recover the latest actually submitted run of the same Goal/session; fresh preparations never infer external settlement from native accounting. Guard wait/block spends no model turn or idle accounting. Ordinary unguarded Goals retain their native accounting and continuation behavior.
+- Guarded admission durably journals an unsubmitted prepared candidate before calling its guard. Pause, cancellation and reload requalify that same Goal/session/guard-scoped ID; prepared proof remains separate from actual `goal-run` submission and cannot authorize completion. Explicit retirement is fenced outside guard callbacks and cannot erase submitted proof.
+
+### Fixed
+
+- RPC guarded Goal continuations recheck current plan mode, blocked Todo policy and host continuation gates after asynchronous admission; late allows no longer start a model turn after those gates close. Explicit user prompts and ordinary unguarded Goals retain their existing behavior.
+- Guarded queued-message drains can consume their own pending input without relaxing autonomous continuation fences. Rejected idle injection retains queued background completions and their commit callbacks instead of acknowledging messages that never reached the agent.
+- Clearing or unregistering a yield-queue kind immediately rejects its drained pending receipts; late denied injection cannot restore cancelled messages or leave disposal receipts suspended.
+- Guarded Goals persist a distinct non-submitted intent, then recheck admission fences before publishing dispatch proof without an asynchronous gap. Cancellation or storage failure before dispatch retains the parked candidate and cannot create a submitted run. The extension port's submitted-only `getLatestRunId()` is separate from prepared proof; native dispatch proof does not establish model execution or LoopX settlement.
+
 ## [18.11.0] - 2026-10-14
 
 ### Added
