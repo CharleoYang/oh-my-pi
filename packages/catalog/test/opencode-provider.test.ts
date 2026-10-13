@@ -414,7 +414,8 @@ describe("Shared models.dev catalog fallback", () => {
 
 			const additiveOptions = { ...options, modelsDev: { ...modelsDev, additiveOnly: true } };
 			const fresh = await resolveProviderModels(additiveOptions, "online-if-uncached");
-			expect(endpointFetches).toBe(1);
+			// The mismatched snapshot is sanitized, so it cannot suppress rediscovery.
+			expect(endpointFetches).toBe(2);
 			expect(fresh.models.find(model => model.id === spec.id)).toMatchObject({
 				name: spec.name,
 				contextWindow: spec.contextWindow,
@@ -440,6 +441,58 @@ describe("Shared models.dev catalog fallback", () => {
 				contextWindow: spec.contextWindow,
 				maxTokens: spec.maxTokens,
 			});
+		} finally {
+			await fs.rm(tempDir, { recursive: true, force: true });
+		}
+	});
+
+	test("rediscovers endpoint overrides from a snapshot written by another omp version (#15557)", async () => {
+		const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-catalog-additive-upgrade-cache-"));
+		try {
+			const spec: ModelSpec<"openai-completions"> = {
+				id: "upgrade-cache-probe",
+				name: "Upgrade Cache Probe",
+				api: "openai-completions",
+				provider: "xiaomi",
+				baseUrl: "https://api.xiaomimimo.com/v1",
+				reasoning: true,
+				input: ["text"],
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+				contextWindow: 262_144,
+				maxTokens: 8192,
+			};
+			const tokenPlanBaseUrl = "https://token-plan-sgp.xiaomimimo.com/v1";
+			let endpointFetches = 0;
+			const options = {
+				providerId: "xiaomi" as const,
+				cacheDbPath: path.join(tempDir, "models.db"),
+				staticModels: [buildModel(spec)],
+				modelsDev: {
+					additiveOnly: true,
+					fetch: async (): Promise<ModelSpec<"openai-completions">[]> => [],
+					map: (payload: ModelSpec<"openai-completions">[]) => payload,
+				},
+				fetchDynamicModels: async () => {
+					endpointFetches++;
+					return [{ ...spec, baseUrl: tokenPlanBaseUrl }];
+				},
+			};
+			await resolveProviderModels(options, "online");
+			const written = readModelCache("xiaomi", 60_000, Date.now, options.cacheDbPath);
+			if (!written) throw new Error("resolver did not persist the endpoint snapshot");
+			// Same fresh authoritative rows, fingerprinted by a different binary.
+			writeModelCache(
+				"xiaomi",
+				written.updatedAt,
+				written.models,
+				written.authoritative,
+				`${written.staticFingerprint}:older-binary`,
+				options.cacheDbPath,
+			);
+
+			const upgraded = await resolveProviderModels(options, "online-if-uncached");
+			expect(endpointFetches).toBe(2);
+			expect(upgraded.models.find(model => model.id === spec.id)?.baseUrl).toBe(tokenPlanBaseUrl);
 		} finally {
 			await fs.rm(tempDir, { recursive: true, force: true });
 		}

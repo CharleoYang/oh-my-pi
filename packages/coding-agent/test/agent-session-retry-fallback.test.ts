@@ -6558,6 +6558,73 @@ describe("AgentSession retry fallback", () => {
 		expect(session.getContextUsage()?.contextWindow).toBe(400_000);
 	});
 
+	it("rebinds the active model when discovery moves its endpoint (#15557)", async () => {
+		// Xiaomi `tp-` keys only authenticate against the discovered token-plan
+		// host; a session pinned to the bundled host at startup 401s until the
+		// discovered endpoint replaces it.
+		authStorage.keys.setRuntime("ollama-cloud", "ollama-cloud-test-key");
+		const buildEndpointModel = (baseUrl: string): Model<"ollama-chat"> =>
+			buildModel({
+				id: "endpoint-moved",
+				name: "Endpoint Moved",
+				api: "ollama-chat",
+				provider: "ollama-cloud",
+				baseUrl,
+				reasoning: true,
+				input: ["text"],
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+				contextWindow: 128_000,
+				maxTokens: 32_000,
+			});
+		const discoveredUrl = "https://discovered.ollama.example";
+		writeModelCache(
+			"ollama-cloud",
+			Date.now(),
+			[buildEndpointModel(discoveredUrl)],
+			true,
+			"",
+			path.join(tempDir.path(), "models.db"),
+		);
+		const registry = new ModelRegistry(authStorage, path.join(tempDir.path(), "models.json"));
+		const agent = new Agent({
+			getApiKey: model => `${model.provider}-test-key`,
+			initialState: {
+				model: buildEndpointModel("https://ollama.com"),
+				systemPrompt: ["Test"],
+				tools: [],
+				messages: [],
+			},
+			streamFn: () => {
+				throw new Error("Not exercised");
+			},
+		});
+		session = new AgentSession({
+			agent,
+			sessionManager: SessionManager.inMemory(),
+			settings: Settings.isolated({ "compaction.enabled": false }),
+			modelRegistry: registry,
+			rebindModelAfterDiscovery: true,
+		});
+
+		const { promise: modelChanged, resolve: resolveModelChanged } = Promise.withResolvers<void>();
+		const unsubscribe = session.subscribe(event => {
+			if (event.type === "model_changed") {
+				unsubscribe();
+				resolveModelChanged();
+			}
+		});
+		registry.refreshInBackground("offline");
+		await Promise.race([
+			modelChanged,
+			scheduler.wait(5_000).then(() => {
+				throw new Error("model_changed was not emitted after discovery moved the endpoint");
+			}),
+		]);
+
+		expect(session.model?.id).toBe("endpoint-moved");
+		expect(session.model?.baseUrl).toBe(discoveredUrl);
+	});
+
 	it("warns on unknown or malformed model-selector chain keys at startup", () => {
 		const primaryModel = getBundledModel("openai", "gpt-4o-mini");
 		if (!primaryModel) {

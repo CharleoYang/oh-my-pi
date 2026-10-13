@@ -288,14 +288,29 @@ export async function resolveProviderModels<TApi extends Api = Api, TModelsDevPa
 			? `${staticCatalogFingerprint}:drop:${Bun.hash(cacheDropIds.join("\0")).toString(36)}`
 			: staticCatalogFingerprint;
 	const cacheFingerprintMatches = cache?.staticFingerprint === staticFingerprint && staticFingerprint.length > 0;
+	// Additive shared-catalog rows may only introduce ids, and additive mode is
+	// part of cache identity. A same-id row in a matching snapshot was therefore
+	// written by endpoint discovery (e.g. Xiaomi `tp-` keys pinned to a
+	// token-plan host), not models.dev. Strip same-id rows from any other
+	// snapshot: an older binary, changed static catalog, or non-additive writer.
+	const strippedCacheModelIds =
+		additiveStaticModelIds && !cacheFingerprintMatches ? additiveStaticModelIds : undefined;
 	const cacheNeedsModelMigration =
 		!cacheFingerprintMatches &&
 		cacheDropIds !== undefined &&
 		usableCachedModels.some(model => cacheDropIds.includes(model.id));
+	// Stripping same-id rows from a snapshot that endpoint discovery may have
+	// written reverts them to static metadata (and static hosts), so the snapshot
+	// cannot stand in for a refresh: refetch instead of serving it until the TTL.
+	const cacheNeedsEndpointRefresh =
+		strippedCacheModelIds !== undefined &&
+		typeof options.fetchDynamicModels === "function" &&
+		usableCachedModels.some(model => strippedCacheModelIds.has(model.id));
 	const hasUsableFreshCache =
 		(cache?.fresh ?? false) &&
 		!cacheHasUnresolvedHeaders &&
 		!cacheNeedsModelMigration &&
+		!cacheNeedsEndpointRefresh &&
 		(!dynamicModelsAuthoritative || cacheFingerprintMatches);
 	const dynamicFetcher = options.fetchDynamicModels;
 	const hasDynamicFetcher = typeof dynamicFetcher === "function";
@@ -305,13 +320,6 @@ export async function resolveProviderModels<TApi extends Api = Api, TModelsDevPa
 	const cacheAgeMs = cache ? now() - cache.updatedAt : Number.POSITIVE_INFINITY;
 	const shouldFetchFromNetwork =
 		hasRemoteFetcher && shouldFetchRemoteSources(strategy, hasUsableFreshCache, hasAuthoritativeCache, cacheAgeMs);
-	// Additive shared-catalog rows may only introduce ids, and additive mode is
-	// part of cache identity. A same-id row in a matching snapshot was therefore
-	// written by endpoint discovery (e.g. Xiaomi `tp-` keys pinned to a
-	// token-plan host), not models.dev. Strip same-id rows from any other
-	// snapshot: an older binary, changed static catalog, or non-additive writer.
-	const strippedCacheModelIds =
-		additiveStaticModelIds && !cacheFingerprintMatches ? additiveStaticModelIds : undefined;
 
 	// Cold-start fast path: when a fresh, authoritative cache exists, the network
 	// fetch is skipped, AND the static catalog slice is byte-identical to what

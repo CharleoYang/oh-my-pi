@@ -13507,10 +13507,14 @@ export class AgentSession implements SettingsScope {
 	 * context window and synthesizes a separate `-1m` sibling only during live
 	 * discovery; the bundled base entry still carries the full long-context
 	 * window, so a fresh session runs with the 1.05M window that contradicts the
-	 * 400K catalog value until the user re-selects the same model. Re-look-up the
-	 * active selector post-discovery and, when its context window changed, fold
-	 * the refreshed spec into the live model. Same selector, so this is a metadata
-	 * refresh with no provider-session reset; reconcile model-dependent tools and
+	 * 400K catalog value until the user re-selects the same model. Discovery can
+	 * also move the endpoint: Xiaomi `tp-` token-plan keys only work against the
+	 * discovered token-plan host, so a session bound to the bundled host would
+	 * 401 until re-selection (#15557). Re-look-up the active selector
+	 * post-discovery and, when its context window or `baseUrl` changed, fold the
+	 * refreshed spec into the live model. A context-only change is a metadata
+	 * refresh with no provider-session reset; an endpoint change resets provider
+	 * sessions bound to the old host. Reconcile model-dependent tools and
 	 * append-only state before `model_changed` notifies the status line and RPC
 	 * subscribers. Issue #10488.
 	 */
@@ -13526,9 +13530,14 @@ export class AgentSession implements SettingsScope {
 		if (!current || !modelsAreEqual(current, boundAtStartup)) return;
 		const found = this.#modelRegistry.find(current.provider, current.id);
 		const refreshed = found && this.#modelRegistry.fitContextWindow(found, this.settings);
-		if (!refreshed || refreshed.contextWindow === current.contextWindow) return;
-		this.agent.setModel(refreshed);
-		await this.#reconcileModelDependentState(refreshed);
+		if (!refreshed) return;
+		if (refreshed.baseUrl !== current.baseUrl) {
+			await this.#setModelWithProviderSessionReset(refreshed);
+		} else {
+			if (refreshed.contextWindow === current.contextWindow) return;
+			this.agent.setModel(refreshed);
+			await this.#reconcileModelDependentState(refreshed);
+		}
 		if (this.#isDisposed) return;
 		this.#emit({ type: "model_changed" });
 	}
