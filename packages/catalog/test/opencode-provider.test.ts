@@ -324,7 +324,7 @@ describe("Shared models.dev catalog fallback", () => {
 	test("keeps cached endpoint-discovery overrides of static ids in additive mode (#15557)", async () => {
 		const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-catalog-additive-endpoint-cache-"));
 		try {
-			const bundledModel = buildModel({
+			const spec: ModelSpec<"openai-completions"> = {
 				id: "endpoint-cache-probe",
 				name: "Endpoint Cache Probe",
 				api: "openai-completions",
@@ -335,7 +335,8 @@ describe("Shared models.dev catalog fallback", () => {
 				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 				contextWindow: 262_144,
 				maxTokens: 8192,
-			});
+			};
+			const bundledModel = buildModel(spec);
 			const tokenPlanBaseUrl = "https://token-plan-sgp.xiaomimimo.com/v1";
 			expect(bundledModel.baseUrl).not.toBe(tokenPlanBaseUrl);
 			let endpointAvailable = true;
@@ -346,13 +347,13 @@ describe("Shared models.dev catalog fallback", () => {
 				staticModels: [bundledModel],
 				modelsDev: {
 					additiveOnly: true,
-					fetch: async (): Promise<Array<typeof bundledModel>> => [],
-					map: (payload: Array<typeof bundledModel>) => payload,
+					fetch: async (): Promise<ModelSpec<"openai-completions">[]> => [],
+					map: (payload: ModelSpec<"openai-completions">[]) => payload,
 				},
 				fetchDynamicModels: async () => {
 					endpointFetches++;
 					if (!endpointAvailable) throw new Error("endpoint unavailable");
-					return [{ ...bundledModel, baseUrl: tokenPlanBaseUrl }];
+					return [{ ...spec, baseUrl: tokenPlanBaseUrl }];
 				},
 			};
 			await resolveProviderModels(options, "online");
