@@ -2239,12 +2239,28 @@ export function buildResponsesInput<TApi extends Api>(options: BuildResponsesInp
 						rawSanitizedHistoryItems !== undefined &&
 						isColdReplayableResponsesTurn(rawSanitizedHistoryItems));
 				if (replayNativeItems && sanitizedHistoryItems) {
+					const unrecordedCalls = pickUnrecordedResponsesToolCalls(assistantMsg, historyItems);
+					const turnItems = unrecordedCalls
+						? [
+								...sanitizedHistoryItems,
+								...convertResponsesAssistantMessage(
+									unrecordedCalls,
+									options.model,
+									msgIndex,
+									knownCallIds,
+									false,
+									customCallIds,
+									false,
+									supportsCustomToolCalls,
+									customToolWireNameMap,
+									computerCallIds,
+								),
+							]
+						: sanitizedHistoryItems;
 					// Model-owned replay items can carry reserved control-token
 					// spellings as data (the model writing *about* Harmony); escape the
 					// transport copy just like client turns.
-					const wireItems = escapeControlTokens
-						? escapeReplayedControlTokens(sanitizedHistoryItems)
-						: sanitizedHistoryItems;
+					const wireItems = escapeControlTokens ? escapeReplayedControlTokens(turnItems) : turnItems;
 					if (providerPayload?.dt) {
 						pushNativeReplayItems(wireItems);
 					} else {
@@ -2433,6 +2449,39 @@ function ensureRequiredResponsesReasoningReplay(
 		turnStart = index + 1;
 	}
 	return changed ? repaired : items;
+}
+
+/**
+ * Narrow an assistant turn to the tool calls its stored native Responses items
+ * never recorded, or `undefined` when every call has an item.
+ *
+ * Native items are collected from `response.output_item.done`. A call cut by
+ * the output limit — or by a proxy that never sends its done event — survives
+ * only as a `toolCall` block, yet the agent loop still pairs it with a
+ * (synthetic) result. Native replay rebuilds those calls from the returned
+ * blocks via {@link convertResponsesAssistantMessage}; otherwise the result
+ * replays as an `[Orphan … result]` assistant note that can end the input
+ * (#15577). Matching uses the raw items, so calls the replay sanitizer drops
+ * stay dropped.
+ */
+export function pickUnrecordedResponsesToolCalls(
+	assistantMsg: AssistantMessage,
+	historyItems: ReadonlyArray<Record<string, unknown>>,
+): AssistantMessage | undefined {
+	// Replay transforms rewrite block ids through `sanitizeCodexCallId`; compare
+	// both sides in that space so a stored non-conforming `call_id` still matches.
+	const recordedCallIds = new Set<string>();
+	for (const item of historyItems) {
+		if (responsesToolCallKind(item.type) !== undefined && typeof item.call_id === "string") {
+			recordedCallIds.add(sanitizeCodexCallId(item.call_id));
+		}
+	}
+	const unrecorded = assistantMsg.content.filter(
+		block =>
+			block.type === "toolCall" &&
+			!recordedCallIds.has(sanitizeCodexCallId(normalizeResponsesToolCallId(block.id).callId)),
+	);
+	return unrecorded.length > 0 ? { ...assistantMsg, content: unrecorded } : undefined;
 }
 
 export function convertResponsesAssistantMessage<TApi extends Api>(

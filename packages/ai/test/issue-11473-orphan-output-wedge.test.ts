@@ -50,10 +50,10 @@ function toolResult(callId: string, toolName: string, text: string, isError = fa
 	};
 }
 
-it("does not wedge a repaired orphan-output note between a call and its output (#11473)", () => {
-	// One turn: model issued parallel `todo` (call_00) + `bash` (call_01). `todo`
-	// failed omp-side arg validation, so the native-replay snapshot (dt:false)
-	// carries only the landed `bash` call; `todo` survives as an orphan result.
+it("rebuilds a call missing from the native snapshot so its result stays paired (#11473, #15577)", () => {
+	// One turn: model issued parallel `todo` (call_00) + `bash` (call_01), but the
+	// native-replay snapshot (dt:false) carries only the landed `bash` call. The
+	// `todo` call is rebuilt from its block instead of orphaning its result.
 	const assistant: AssistantMessage = {
 		role: "assistant",
 		content: [
@@ -92,64 +92,36 @@ it("does not wedge a repaired orphan-output note between a call and its output (
 		repairOrphanOutputs: true,
 		nativeHistory: { replay: true, filterReasoning: false },
 	});
-	const types = items.map(wireType);
-
-	// The orphan result is preserved as an assistant note (call_id + output text).
-	const note = items.find(item => {
-		if (!item || typeof item !== "object") return false;
-		const candidate = item as { type?: unknown; role?: unknown; content?: unknown };
-		return (
-			candidate.type === "message" &&
-			candidate.role === "assistant" &&
-			typeof candidate.content === "string" &&
-			candidate.content.includes("call_00")
-		);
-	}) as { content?: string } | undefined;
-	expect(note?.content).toContain("[Orphan tool result; call_id=call_00]");
-	expect(note?.content).toContain("Invalid todo arguments");
-
-	// Invariant: no message sits between a function_call and a function_call_output.
-	// Before the fix the note landed at index 2, wedged inside the bash batch.
-	const firstOutput = types.indexOf("function_call_output");
-	const lastCall = types.lastIndexOf("function_call");
-	expect(firstOutput).toBeGreaterThanOrEqual(0);
-	expect(lastCall).toBeLessThan(firstOutput);
-	expect(types.slice(lastCall + 1, firstOutput)).toEqual([]);
+	expect(JSON.stringify(items)).not.toContain("[Orphan");
+	expect(items.map(item => [wireType(item), "call_id" in item ? item.call_id : undefined])).toEqual([
+		["reasoning", undefined],
+		["function_call", "call_01"],
+		["function_call", "call_00"],
+		["function_call_output", "call_00"],
+		["function_call_output", "call_01"],
+		["message:user", undefined],
+	]);
 });
 
 it("hoists a repaired orphan-output note from between two outputs (#13083)", () => {
-	// The native snapshot retains the first and third calls while the middle
-	// call's result survives independently. Output repair turns that result into
-	// a note after the first paired output.
-	const assistant: AssistantMessage = {
-		role: "assistant",
-		content: [
-			{ type: "toolCall", id: "call_00", name: "read", arguments: { path: "a" } },
-			{ type: "toolCall", id: "call_01", name: "bash", arguments: { command: "pwd" } },
-			{ type: "toolCall", id: "call_02", name: "todo", arguments: {} },
-		],
-		api: model.api,
-		provider: model.provider,
-		model: model.id,
-		usage: zeroUsage,
-		stopReason: "toolUse",
-		providerPayload: createOpenAIResponsesHistoryPayload(
-			model.provider,
-			[
-				{ type: "reasoning", id: "rs_2", summary: [], content: [] },
-				{ type: "function_call", call_id: "call_00", name: "read", arguments: "{}" },
-				{ type: "function_call", call_id: "call_02", name: "todo", arguments: "{}" },
-			],
-			true,
-		),
-		timestamp: 1,
-	};
+	// A replayed snapshot retains the first and third calls while the middle
+	// call's output survives without its call. Output repair turns that output
+	// into a note after the first paired output.
 	const context: Context = {
 		messages: [
-			assistant,
-			toolResult("call_00", "read", "file contents"),
-			toolResult("call_01", "bash", "working directory"),
-			toolResult("call_02", "todo", "task updated"),
+			{
+				role: "user",
+				content: "resume",
+				providerPayload: createOpenAIResponsesHistoryPayload(model.provider, [
+					{ type: "reasoning", id: "rs_2", summary: [], content: [] },
+					{ type: "function_call", call_id: "call_00", name: "read", arguments: "{}" },
+					{ type: "function_call", call_id: "call_02", name: "todo", arguments: "{}" },
+					{ type: "function_call_output", call_id: "call_00", output: "file contents" },
+					{ type: "function_call_output", call_id: "call_01", output: "working directory" },
+					{ type: "function_call_output", call_id: "call_02", output: "task updated" },
+				]),
+				timestamp: 1,
+			},
 			{ role: "user", content: "continue", timestamp: 5 },
 		],
 	};

@@ -2071,6 +2071,71 @@ describe("OpenAI responses history payload", () => {
 		expect(note?.content).toContain(orphanOutput);
 	});
 
+	it("replays a length-cut tool call missing from native items so the input ends on its result (#15577)", () => {
+		// The output limit cut `call_B` before its `output_item.done`, so the
+		// stored items lack it while the content keeps its block and the agent
+		// loop still appended a synthetic result for it.
+		const limitText = "Tool call was not executed because the assistant hit its output token limit.";
+		const model = getOpenAIReasoningModel("openai", "gpt-5-mini");
+		const input = buildResponsesInput({
+			model,
+			context: {
+				messages: [
+					{ role: "user", content: "write both batches", timestamp: 1 },
+					{
+						...makeAssistantMessage(
+							[
+								{ type: "reasoning", id: "rs_1", summary: [], encrypted_content: "enc" },
+								{
+									type: "function_call",
+									id: "fc_A",
+									call_id: "call_A",
+									name: "write",
+									arguments: '{"path":"a.json","content":"{}"}',
+								},
+							],
+							true,
+						),
+						content: [
+							{
+								type: "toolCall",
+								id: "call_A|fc_A",
+								name: "write",
+								arguments: { path: "a.json", content: "{}" },
+							},
+							{ type: "toolCall", id: "call_B|fc_B", name: "write", arguments: { path: "b.json" } },
+						],
+						stopReason: "length",
+					},
+					...["call_A|fc_A", "call_B|fc_B"].map(toolCallId => ({
+						role: "toolResult" as const,
+						toolCallId,
+						toolName: "write",
+						content: [{ type: "text" as const, text: limitText }],
+						isError: true,
+						timestamp: 3,
+					})),
+				],
+			},
+			strictResponsesPairing: true,
+			supportsImageDetailOriginal: true,
+			nativeHistory: { replay: true, filterReasoning: false },
+			repairOrphanOutputs: true,
+		});
+
+		expect(JSON.stringify(input)).not.toContain("[Orphan");
+		expect(listResponsesToolItems(input)).toEqual([
+			["function_call", "call_A", "write"],
+			["function_call", "call_B", "write"],
+			["function_call_output", "call_A", undefined],
+			["function_call_output", "call_B", undefined],
+		]);
+		expect(input.at(-1)).toMatchObject({ type: "function_call_output", call_id: "call_B" });
+		expect(JSON.parse(String(findResponsesInputItemByCallId(input, "function_call", "call_B")?.arguments))).toEqual({
+			path: "b.json",
+		});
+	});
+
 	it("honors strict pairing overrides against opposite catalog defaults", async () => {
 		const orphanCallId = "call_override_orphan";
 		const orphanOutput = "orphan result";
@@ -2084,9 +2149,14 @@ describe("OpenAI responses history payload", () => {
 					model: "gpt-5-mini",
 					usage: issue5002ZeroUsage,
 					stopReason: "toolUse",
+					// The replay sanitizer drops the malformed native call, so the
+					// result reaches the wire without a call.
 					providerPayload: createOpenAIResponsesHistoryPayload(
 						"openai",
-						[{ type: "message", role: "assistant", content: [{ type: "output_text", text: "snapshot" }] }],
+						[
+							{ type: "message", role: "assistant", content: [{ type: "output_text", text: "snapshot" }] },
+							{ type: "function_call", call_id: orphanCallId, name: "", arguments: "{}" },
+						],
 						false,
 					),
 					timestamp: Date.now(),

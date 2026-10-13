@@ -148,6 +148,7 @@ import {
 	isOpenAIResponsesProgressEvent,
 	mapOpenAIResponsesStopReason,
 	normalizeOpenAIPromptCacheKey,
+	pickUnrecordedResponsesToolCalls,
 	populateResponsesUsageFromResponse,
 	promoteResponsesToolUseStopReason,
 	settleReasoningSummary,
@@ -5052,10 +5053,30 @@ function convertMessages(model: Model<"openai-codex-responses">, context: Contex
 					supportsImageDetailOriginal: model.compat.supportsImageDetailOriginal,
 				});
 				if (sanitizedHistoryItems) {
-					const rawReplayItems =
+					const nativeReplayItems =
 						model.supportsComputerUse === true
 							? sanitizedHistoryItems
 							: unrollCodexComputerItems(sanitizedHistoryItems, model.compat.supportsImageDetailOriginal);
+					const unrecordedCalls = pickUnrecordedResponsesToolCalls(assistantMsg, historyItems);
+					const rawReplayItems = unrecordedCalls
+						? [
+								...nativeReplayItems,
+								...convertResponsesAssistantMessage(
+									model.supportsComputerUse === true
+										? unrecordedCalls
+										: unrollCodexComputerAssistantMessage(unrecordedCalls),
+									model,
+									msgIndex,
+									knownCallIds,
+									false,
+									customCallIds,
+									false,
+									true,
+									undefined,
+									computerCallIds,
+								),
+							]
+						: nativeReplayItems;
 					const replayItems = escapeControlTokens ? escapeReplayedControlTokens(rawReplayItems) : rawReplayItems;
 					for (const item of replayItems) {
 						if (item.type === "custom_tool_call") {

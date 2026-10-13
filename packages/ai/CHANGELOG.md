@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed OpenAI Responses and Codex requests failing (e.g. `400 … does not support assistant message prefill` on Anthropic-backed gateways) after the output limit cut a parallel tool call: the cut call is now replayed from the transcript so its result stays paired instead of becoming a trailing `[Orphan … result]` note ([#15577](https://github.com/can1357/oh-my-pi/issues/15577))
+
 ### Removed
 
 - Removed the `toolNamespacesInfo` stream option; Codex requests no longer send `tool_namespaces_info` turn metadata, and `code_mode_tool_names`/`tool_namespaces_info` are no longer reserved client metadata keys.
