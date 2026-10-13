@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- The Auto-Promote Context and Retry Model Fallback settings now state that they are independent; turn off Retry Model Fallback (`retry.modelFallback`) to stop `retry.fallbackChains` model switches ([#15636](https://github.com/can1357/oh-my-pi/issues/15636))
+
 ## [18.10.4] - 2026-10-13
 
 ### Added
