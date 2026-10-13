@@ -3,7 +3,7 @@ import * as path from "node:path";
 import type { Model } from "@oh-my-pi/pi-ai/types";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { readModelCache, writeModelCache } from "@oh-my-pi/pi-catalog/model-cache";
-import { fingerprintStaticModels } from "@oh-my-pi/pi-catalog/model-manager";
+import { fingerprintModelCache } from "@oh-my-pi/pi-catalog/model-manager";
 import * as catalogModels from "@oh-my-pi/pi-catalog/models";
 import { mergeDiscoveredModel } from "@oh-my-pi/pi-coding-agent/config/model-patch";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
@@ -127,7 +127,7 @@ describe("model merge reuse", () => {
 				},
 			],
 			false,
-			fingerprintStaticModels(existing, false),
+			fingerprintModelCache(existing, { dynamicModelsAuthoritative: false, additiveOnly: true }),
 			cachePath,
 		);
 		const cached = readModelCache("openai", 60_000, Date.now, cachePath);

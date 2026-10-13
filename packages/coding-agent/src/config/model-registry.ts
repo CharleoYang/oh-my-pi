@@ -29,6 +29,7 @@ import { applyCatalogMetrics, CatalogMetricsIndex } from "@oh-my-pi/pi-catalog/i
 import { getModelCacheWriteStats, readModelCache } from "@oh-my-pi/pi-catalog/model-cache";
 import {
 	createModelManager,
+	fingerprintModelCache,
 	fingerprintStaticModels,
 	type ModelManagerOptions,
 	type ModelRefreshStrategy,
@@ -1382,8 +1383,12 @@ export class ModelRegistry {
 				omittedHeaderIds.size > 0 || sharedCatalogProvider
 					? (getBundledModels(providerId as Parameters<typeof getBundledModels>[0]) as Model<Api>[])
 					: undefined;
+			// Shared-catalog managers always opt into additive models.dev rows.
 			const bundledFingerprint = bundledModels
-				? fingerprintStaticModels(bundledModels, sharedCatalogProvider && !additiveSharedCatalogProvider)
+				? fingerprintModelCache(bundledModels, {
+						dynamicModelsAuthoritative: sharedCatalogProvider && !additiveSharedCatalogProvider,
+						additiveOnly: sharedCatalogProvider,
+					})
 				: undefined;
 			// A matching cache may contain provider-endpoint overrides. Strip
 			// same-id rows only across a bundled-catalog upgrade, where the

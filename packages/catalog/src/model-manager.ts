@@ -277,7 +277,10 @@ export async function resolveProviderModels<TApi extends Api = Api, TModelsDevPa
 		cost: options.dynamicCostAuthoritative ?? false,
 	};
 	const cacheDropIds = options.dropCachedModelIdsOnStaticMismatch;
-	const staticCatalogFingerprint = fingerprintStaticModels(staticModels, dynamicModelsAuthoritative);
+	const staticCatalogFingerprint = fingerprintModelCache(staticModels, {
+		dynamicModelsAuthoritative,
+		additiveOnly: additiveStaticModelIds !== undefined,
+	});
 	// Endpoint-migration policy is cache identity: adding an id must invalidate
 	// matching-static-catalog caches written by the prior resolver.
 	const staticFingerprint =
@@ -302,13 +305,13 @@ export async function resolveProviderModels<TApi extends Api = Api, TModelsDevPa
 	const cacheAgeMs = cache ? now() - cache.updatedAt : Number.POSITIVE_INFINITY;
 	const shouldFetchFromNetwork =
 		hasRemoteFetcher && shouldFetchRemoteSources(strategy, hasUsableFreshCache, hasAuthoritativeCache, cacheAgeMs);
-	// Additive shared-catalog rows may only introduce ids, so a same-id row in a
-	// snapshot written against this exact static catalog is an endpoint-discovery
-	// override (e.g. Xiaomi `tp-` keys pinned to a token-plan host). Strip such
-	// rows only when no endpoint fetcher could have produced them or the static
-	// catalog changed since the snapshot was written.
+	// Additive shared-catalog rows may only introduce ids, and additive mode is
+	// part of cache identity. A same-id row in a matching snapshot was therefore
+	// written by endpoint discovery (e.g. Xiaomi `tp-` keys pinned to a
+	// token-plan host), not models.dev. Strip same-id rows from any other
+	// snapshot: an older binary, changed static catalog, or non-additive writer.
 	const strippedCacheModelIds =
-		additiveStaticModelIds && (!hasDynamicFetcher || !cacheFingerprintMatches) ? additiveStaticModelIds : undefined;
+		additiveStaticModelIds && !cacheFingerprintMatches ? additiveStaticModelIds : undefined;
 
 	// Cold-start fast path: when a fresh, authoritative cache exists, the network
 	// fetch is skipped, AND the static catalog slice is byte-identical to what
@@ -642,6 +645,20 @@ export function fingerprintStaticModels<TApi extends Api>(
 	if (dynamicModelsAuthoritative)
 		return `${MODEL_CACHE_FINGERPRINT_VERSION}:authoritative:${fingerprintStaticModels(models)}`;
 	return `${MODEL_CACHE_FINGERPRINT_VERSION}:${Bun.hash(JSON.stringify(models)).toString(36)}`;
+}
+
+/**
+ * Return the cache identity for a resolved provider snapshot: static catalog
+ * content plus resolver policies that decide which cached same-id rows are
+ * trustworthy. `ModelRegistry`'s startup cache reader recomputes it to
+ * recognize snapshots written by {@link resolveProviderModels}.
+ */
+export function fingerprintModelCache<TApi extends Api>(
+	models: readonly (ModelSpec<TApi> | Model<TApi>)[],
+	policy: { dynamicModelsAuthoritative: boolean; additiveOnly: boolean },
+): string {
+	const fingerprint = fingerprintStaticModels(models, policy.dynamicModelsAuthoritative);
+	return policy.additiveOnly && models.length > 0 ? `${fingerprint}:additive` : fingerprint;
 }
 
 function mergeDynamicModel<TApi extends Api>(

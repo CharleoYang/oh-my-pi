@@ -373,6 +373,78 @@ describe("Shared models.dev catalog fallback", () => {
 		}
 	});
 
+	test("strips same-id rows from a non-additive snapshot even with endpoint discovery", async () => {
+		const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-catalog-additive-policy-cache-"));
+		try {
+			const spec: ModelSpec<"openai-completions"> = {
+				id: "additive-policy-probe",
+				name: "Additive Policy Probe",
+				api: "openai-completions",
+				provider: "xiaomi",
+				baseUrl: "https://api.xiaomimimo.com/v1",
+				reasoning: true,
+				input: ["text"],
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+				contextWindow: 262_144,
+				maxTokens: 8192,
+			};
+			const staticModel = buildModel(spec);
+			const endpointSpec: ModelSpec<"openai-completions"> = { ...spec, id: "endpoint-only-probe" };
+			let endpointAvailable = true;
+			let endpointFetches = 0;
+			const modelsDev = {
+				fetch: async (): Promise<ModelSpec<"openai-completions">[]> => [
+					{ ...spec, name: "Untrusted models.dev override", contextWindow: 1, maxTokens: 1 },
+				],
+				map: (payload: ModelSpec<"openai-completions">[]) => payload,
+			};
+			const options = {
+				providerId: "xiaomi" as const,
+				cacheDbPath: path.join(tempDir, "models.db"),
+				staticModels: [staticModel],
+				modelsDev,
+				fetchDynamicModels: async () => {
+					endpointFetches++;
+					if (!endpointAvailable) throw new Error("endpoint unavailable");
+					return [endpointSpec];
+				},
+			};
+			const seeded = await resolveProviderModels(options, "online");
+			expect(seeded.models.find(model => model.id === spec.id)?.name).toBe("Untrusted models.dev override");
+
+			const additiveOptions = { ...options, modelsDev: { ...modelsDev, additiveOnly: true } };
+			const fresh = await resolveProviderModels(additiveOptions, "online-if-uncached");
+			expect(endpointFetches).toBe(1);
+			expect(fresh.models.find(model => model.id === spec.id)).toMatchObject({
+				name: spec.name,
+				contextWindow: spec.contextWindow,
+				maxTokens: spec.maxTokens,
+			});
+
+			endpointAvailable = false;
+			const fallback = await resolveProviderModels(
+				{
+					...additiveOptions,
+					modelsDev: {
+						...additiveOptions.modelsDev,
+						fetch: async (): Promise<ModelSpec<"openai-completions">[]> => {
+							throw new Error("models.dev unavailable");
+						},
+					},
+				},
+				"online",
+			);
+			expect(fallback.stale).toBe(true);
+			expect(fallback.models.find(model => model.id === spec.id)).toMatchObject({
+				name: spec.name,
+				contextWindow: spec.contextWindow,
+				maxTokens: spec.maxTokens,
+			});
+		} finally {
+			await fs.rm(tempDir, { recursive: true, force: true });
+		}
+	});
+
 	test("retains one source's cached slice when the other source refreshes", async () => {
 		const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-catalog-partial-source-refresh-"));
 		try {
