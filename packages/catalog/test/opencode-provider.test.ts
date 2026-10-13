@@ -321,6 +321,47 @@ describe("Shared models.dev catalog fallback", () => {
 		}
 	});
 
+	test("keeps cached endpoint-discovery overrides of static ids in additive mode (#15557)", async () => {
+		const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-catalog-additive-endpoint-cache-"));
+		try {
+			const bundledModel = getBundledModels("xiaomi").find(model => model.id === "mimo-v2.6-flash");
+			if (!bundledModel) throw new Error("Xiaomi bundled catalog lacks mimo-v2.6-flash");
+			const tokenPlanBaseUrl = "https://token-plan-sgp.xiaomimimo.com/v1";
+			expect(bundledModel.baseUrl).not.toBe(tokenPlanBaseUrl);
+			let endpointAvailable = true;
+			let endpointFetches = 0;
+			const options = {
+				providerId: "xiaomi" as const,
+				cacheDbPath: path.join(tempDir, "models.db"),
+				staticModels: [bundledModel],
+				modelsDev: {
+					additiveOnly: true,
+					fetch: async (): Promise<Array<typeof bundledModel>> => [],
+					map: (payload: Array<typeof bundledModel>) => payload,
+				},
+				fetchDynamicModels: async () => {
+					endpointFetches++;
+					if (!endpointAvailable) throw new Error("endpoint unavailable");
+					return [{ ...bundledModel, baseUrl: tokenPlanBaseUrl }];
+				},
+			};
+			await resolveProviderModels(options, "online");
+
+			// Fresh authoritative cache: no network, the discovered host must survive.
+			const fresh = await resolveProviderModels(options, "online-if-uncached");
+			expect(endpointFetches).toBe(1);
+			expect(fresh.models.find(model => model.id === bundledModel.id)?.baseUrl).toBe(tokenPlanBaseUrl);
+
+			// Endpoint outage: the cached fallback must keep the discovered host too.
+			endpointAvailable = false;
+			const fallback = await resolveProviderModels(options, "online");
+			expect(fallback.stale).toBe(true);
+			expect(fallback.models.find(model => model.id === bundledModel.id)?.baseUrl).toBe(tokenPlanBaseUrl);
+		} finally {
+			await fs.rm(tempDir, { recursive: true, force: true });
+		}
+	});
+
 	test("retains one source's cached slice when the other source refreshes", async () => {
 		const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-catalog-partial-source-refresh-"));
 		try {

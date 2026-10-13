@@ -6,6 +6,10 @@
 
 - Added the `classifier-cot-extraction` rule axis, set for Claude, marking models whose classifier refuses earlier reasoning quoted back into their input ([#15436](https://github.com/can1357/oh-my-pi/pull/15436) by [@will-bogusz](https://github.com/will-bogusz))
 
+### Fixed
+
+- Fixed Xiaomi `tp-` token-plan models reverting to `api.xiaomimimo.com` after a background catalog refresh, which made every model switch, new session, and subagent fail with `401 Invalid API Key` ([#15557](https://github.com/can1357/oh-my-pi/issues/15557))
+
 ### Removed
 
 - Removed the Codex `toolMode` model field (`code_mode_only`); Codex discovery no longer maps `tool_mode`

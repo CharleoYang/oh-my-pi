@@ -302,12 +302,17 @@ export async function resolveProviderModels<TApi extends Api = Api, TModelsDevPa
 	const cacheAgeMs = cache ? now() - cache.updatedAt : Number.POSITIVE_INFINITY;
 	const shouldFetchFromNetwork =
 		hasRemoteFetcher && shouldFetchRemoteSources(strategy, hasUsableFreshCache, hasAuthoritativeCache, cacheAgeMs);
+	// Additive shared-catalog rows may only introduce ids, so a same-id row in a
+	// snapshot written against this exact static catalog is an endpoint-discovery
+	// override (e.g. Xiaomi `tp-` keys pinned to a token-plan host). Strip such
+	// rows only when no endpoint fetcher could have produced them or the static
+	// catalog changed since the snapshot was written.
+	const strippedCacheModelIds =
+		additiveStaticModelIds && (!hasDynamicFetcher || !cacheFingerprintMatches) ? additiveStaticModelIds : undefined;
 
 	// Cold-start fast path: when a fresh, authoritative cache exists, the network
 	// fetch is skipped, AND the static catalog slice is byte-identical to what
 	// was merged in last time, the cache row IS the authoritative merge result.
-	// Additive caches still need same-id rows stripped because an older binary
-	// may have written the snapshot before additive semantics were enabled.
 	if (
 		!shouldFetchFromNetwork &&
 		cache?.fresh &&
@@ -315,8 +320,8 @@ export async function resolveProviderModels<TApi extends Api = Api, TModelsDevPa
 		cacheFingerprintMatches &&
 		!cacheHasUnresolvedHeaders
 	) {
-		const cacheContribution = additiveStaticModelIds
-			? restoredCache.models.filter(model => !additiveStaticModelIds.has(model.id))
+		const cacheContribution = strippedCacheModelIds
+			? restoredCache.models.filter(model => !strippedCacheModelIds.has(model.id))
 			: restoredCache.models;
 		const cachedModels = additiveStaticModelIds
 			? mergeCatalogMetrics(
@@ -361,8 +366,8 @@ export async function resolveProviderModels<TApi extends Api = Api, TModelsDevPa
 			);
 	// Additive shared-catalog rows may only introduce IDs. Apply that boundary
 	// to cache fallback too, including snapshots written by an older binary.
-	const cacheModels = additiveStaticModelIds
-		? preparedCacheModels.filter(model => !additiveStaticModelIds.has(model.id))
+	const cacheModels = strippedCacheModelIds
+		? preparedCacheModels.filter(model => !strippedCacheModelIds.has(model.id))
 		: preparedCacheModels;
 	const dynamicModels = fetchedDynamicModels?.models ?? [];
 	// A successful empty endpoint result stays authoritative for THIS cycle (so an
@@ -438,8 +443,8 @@ export async function resolveProviderModels<TApi extends Api = Api, TModelsDevPa
 				cacheFingerprintMatches,
 				options.dropCachedModelIdsOnStaticMismatch,
 			);
-			const latestCacheModels = additiveStaticModelIds
-				? preparedLatestCacheModels.filter(model => !additiveStaticModelIds.has(model.id))
+			const latestCacheModels = strippedCacheModelIds
+				? preparedLatestCacheModels.filter(model => !strippedCacheModelIds.has(model.id))
 				: preparedLatestCacheModels;
 			const fallbackSnapshotModels = collapseBuiltVariants(
 				mergeDynamicModels(
