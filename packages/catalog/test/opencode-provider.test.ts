@@ -324,8 +324,18 @@ describe("Shared models.dev catalog fallback", () => {
 	test("keeps cached endpoint-discovery overrides of static ids in additive mode (#15557)", async () => {
 		const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-catalog-additive-endpoint-cache-"));
 		try {
-			const bundledModel = getBundledModels("xiaomi").find(model => model.id === "mimo-v2.6-flash");
-			if (!bundledModel) throw new Error("Xiaomi bundled catalog lacks mimo-v2.6-flash");
+			const bundledModel = buildModel({
+				id: "endpoint-cache-probe",
+				name: "Endpoint Cache Probe",
+				api: "openai-completions",
+				provider: "xiaomi",
+				baseUrl: "https://api.xiaomimimo.com/v1",
+				reasoning: true,
+				input: ["text"],
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+				contextWindow: 262_144,
+				maxTokens: 8192,
+			});
 			const tokenPlanBaseUrl = "https://token-plan-sgp.xiaomimimo.com/v1";
 			expect(bundledModel.baseUrl).not.toBe(tokenPlanBaseUrl);
 			let endpointAvailable = true;
