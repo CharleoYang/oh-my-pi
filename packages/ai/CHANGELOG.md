@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed Responses requests 400ing (DeepSeek: "The `reasoning_text` in the thinking mode must be passed back to the API") after a tool call whose arguments were invalid JSON: the call is now replayed with its parse diagnostic instead of being dropped and leaving a trailing `[Orphan tool result]` note ([#15568](https://github.com/can1357/oh-my-pi/issues/15568))
+
 ### Removed
 
 - Removed the `toolNamespacesInfo` stream option; Codex requests no longer send `tool_namespaces_info` turn metadata, and `code_mode_tool_names`/`tool_namespaces_info` are no longer reserved client metadata keys.
