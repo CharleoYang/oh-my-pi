@@ -70,7 +70,8 @@ export async function loopbackGet(url: string, opts: LoopbackGetOptions): Promis
 		clearTimeout(timer);
 		opts.signal?.removeEventListener("abort", onAbort);
 		try {
-			socket?.end();
+			if (response === null) socket?.terminate();
+			else socket?.end();
 		} catch {
 			// socket already torn down
 		}
@@ -87,11 +88,16 @@ export async function loopbackGet(url: string, opts: LoopbackGetOptions): Promis
 	let contentLength: number | null = null;
 	const bodySoFar = () => buffered.slice(headerEnd + 4);
 	try {
-		socket = await Bun.connect({
+		void Bun.connect({
 			hostname,
 			port,
 			socket: {
 				open(s) {
+					socket = s;
+					if (settled) {
+						s.terminate();
+						return;
+					}
 					s.write(`GET ${requestPath} HTTP/1.1\r\nHost: ${target.host}\r\nConnection: close\r\n\r\n`);
 				},
 				data(_s, chunk) {
@@ -124,7 +130,24 @@ export async function loopbackGet(url: string, opts: LoopbackGetOptions): Promis
 					finish(status !== null && headers !== null ? { status, headers, body: bodySoFar() } : null);
 				},
 			},
-		});
+		}).then(
+			connected => {
+				// Bun.connect has no abort option. The timer may have settled before
+				// it resolves, so close a socket that arrives after the deadline.
+				if (settled) {
+					if (socket !== connected) {
+						try {
+							connected.terminate();
+						} catch {
+							// socket already torn down
+						}
+					}
+				} else {
+					socket = connected;
+				}
+			},
+			() => finish(null),
+		);
 	} catch {
 		finish(null);
 	}

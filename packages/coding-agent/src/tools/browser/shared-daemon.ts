@@ -47,10 +47,8 @@ const RESTART_STOP_TIMEOUT_MS = 5_000;
  */
 const HEALTH_CHECK_BUDGET_MS = 15_000;
 /**
- * Hard cap on one probe attempt: the probe's own HTTP budget plus the connect
- * window that runs before that budget starts. `loopbackGet` awaits `Bun.connect`
- * before its timer can settle the call, so without this cap a stalled TCP
- * connect outlives the whole health budget.
+ * Independent cap on one probe attempt, including custom probes that do not
+ * respect the HTTP timeout. The shared health budget still bounds all retries.
  */
 const PROBE_ATTEMPT_CAP_MS = PROBE_TIMEOUT_MS + 1_500;
 /** Marker for a probe the cap abandoned, as opposed to a probe that failed on its own terms. */
@@ -355,9 +353,6 @@ async function checkSharedBrowserReachable(scope: SharedTargetScope, deps: Share
 		 * stalled connect, a non-2xx status, an answer slower than the probe's
 		 * own 1.5 s budget, or an attempt the cap abandoned — `answered` only on
 		 * a 2xx, and `unknown` when the health budget was already spent.
-		 * `loopbackGet` awaits `Bun.connect` before its own timer can settle the
-		 * call, so the cap — not the probe's HTTP budget — is what a stalled
-		 * connect runs into.
 		 */
 		async function probeAttempt(endpoint: string): Promise<"answered" | "silent" | "unknown"> {
 			const capMs = Math.min(deps.probeCapMs ?? PROBE_ATTEMPT_CAP_MS, deadlineAt - Date.now());

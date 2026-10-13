@@ -464,9 +464,8 @@ describe("shared browser reachability check", () => {
 	});
 
 	it("settles and frees its single-flight slot when the CDP connect never opens", async () => {
-		// `loopbackGet` awaits `Bun.connect` before its own timer can settle the
-		// call, so a stalled connect used to pin the check (and every later
-		// cleanup that joined it) indefinitely.
+		// A broker reachability check must free its single-flight slot even if
+		// the TCP connect never settles.
 		const connect = Promise.withResolvers<unknown>();
 		const connectSpy = spyOn(Bun, "connect").mockImplementation((() => connect.promise) as never);
 		try {
