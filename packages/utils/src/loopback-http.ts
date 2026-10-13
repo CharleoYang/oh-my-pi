@@ -11,6 +11,10 @@
  */
 import type { Socket } from "bun";
 
+// A probe may contact an unidentified local listener; never buffer its reply without bounds.
+const MAX_HEADER_BYTES = 16 * 1024;
+const MAX_BODY_BYTES = 4 * 1024 * 1024;
+
 /** Answer of a {@link loopbackGet} probe. */
 export interface LoopbackResponse {
 	status: number;
@@ -43,7 +47,8 @@ function parseHeaders(block: string): Headers {
 
 /**
  * HTTP/1.1 GET over raw TCP that never routes through a proxy. Resolves null when
- * the endpoint is unreachable, aborted, malformed, or slow past `timeoutMs`.
+ * the endpoint is unreachable, aborted, malformed, oversized (16 KiB of headers
+ * or 4 MiB of body), or slow past `timeoutMs`.
  *
  * @example
  * const response = await loopbackGet("http://127.0.0.1:9222/json/version", { timeoutMs: 1500, readBody: true });
@@ -80,13 +85,14 @@ export async function loopbackGet(url: string, opts: LoopbackGetOptions): Promis
 	const onAbort = () => finish(null);
 	const timer = setTimeout(() => finish(null), opts.timeoutMs);
 	opts.signal?.addEventListener("abort", onAbort, { once: true });
-	let buffered = "";
+	const headerParts: string[] = [];
+	let headerLength = 0;
+	let headerMarker = 0;
+	let body: Buffer | undefined;
+	let bodyLength = 0;
 	let status: number | null = null;
 	let headers: Headers | null = null;
-	// Offset of the header/body separator once the header block is complete.
-	let headerEnd = -1;
 	let contentLength: number | null = null;
-	const bodySoFar = () => buffered.slice(headerEnd + 4);
 	try {
 		void Bun.connect({
 			hostname,
@@ -101,25 +107,63 @@ export async function loopbackGet(url: string, opts: LoopbackGetOptions): Promis
 					s.write(`GET ${requestPath} HTTP/1.1\r\nHost: ${target.host}\r\nConnection: close\r\n\r\n`);
 				},
 				data(_s, chunk) {
-					buffered += chunk.toString("latin1");
-					if (status === null) {
-						const match = /^HTTP\/\d(?:\.\d)? (\d{3})/.exec(buffered);
-						if (!match) return;
-						status = Number(match[1]);
-					}
+					if (settled) return;
+					let offset = 0;
 					if (headers === null) {
-						headerEnd = buffered.indexOf("\r\n\r\n");
-						if (headerEnd === -1) return;
-						headers = parseHeaders(buffered.slice(0, headerEnd));
+						// Scan at most the header cap, including a delimiter split across chunks.
+						for (; offset < chunk.length && headerLength < MAX_HEADER_BYTES; offset++) {
+							headerMarker = (headerMarker << 8) | chunk[offset]!;
+							headerLength++;
+							if (headerMarker === 0x0d0a0d0a) {
+								offset++;
+								break;
+							}
+						}
+						headerParts.push(chunk.toString("latin1", 0, offset));
+						if (headerMarker !== 0x0d0a0d0a) {
+							if (headerLength >= MAX_HEADER_BYTES) finish(null);
+							return;
+						}
+						const header = headerParts.join("");
+						const match = /^HTTP\/\d(?:\.\d)? (\d{3})/.exec(header);
+						if (!match) {
+							finish(null);
+							return;
+						}
+						status = Number(match[1]);
+						headers = parseHeaders(header.slice(0, -4));
 						if (!opts.readBody) {
 							finish({ status, headers, body: "" });
 							return;
 						}
 						const lengthHeader = headers.get("content-length");
 						contentLength = lengthHeader !== null && /^\d+$/.test(lengthHeader) ? Number(lengthHeader) : null;
+						if (contentLength !== null && contentLength > MAX_BODY_BYTES) {
+							finish(null);
+							return;
+						}
 					}
-					if (contentLength !== null && bodySoFar().length >= contentLength) {
-						finish({ status, headers, body: bodySoFar().slice(0, contentLength) });
+					const remaining = contentLength === null ? MAX_BODY_BYTES - bodyLength : contentLength - bodyLength;
+					const bytes = chunk.length - offset;
+					if (bytes > remaining && contentLength === null) {
+						finish(null);
+						return;
+					}
+					const take = Math.min(bytes, remaining);
+					if (take > 0) {
+						const size = bodyLength + take;
+						if (!body || body.length < size) {
+							const next = Buffer.allocUnsafe(
+								Math.min(MAX_BODY_BYTES, Math.max(size, body ? body.length * 2 : 4096)),
+							);
+							body?.copy(next, 0, 0, bodyLength);
+							body = next;
+						}
+						chunk.copy(body, bodyLength, offset, offset + take);
+						bodyLength = size;
+					}
+					if (contentLength !== null && bodyLength === contentLength && status !== null && headers !== null) {
+						finish({ status, headers, body: body?.toString("latin1", 0, bodyLength) ?? "" });
 					}
 				},
 				error() {
@@ -127,7 +171,11 @@ export async function loopbackGet(url: string, opts: LoopbackGetOptions): Promis
 				},
 				close() {
 					// Without Content-Length the peer's close delimits the body.
-					finish(status !== null && headers !== null ? { status, headers, body: bodySoFar() } : null);
+					finish(
+						status !== null && headers !== null
+							? { status, headers, body: body?.toString("latin1", 0, bodyLength) ?? "" }
+							: null,
+					);
 				},
 			},
 		}).then(
