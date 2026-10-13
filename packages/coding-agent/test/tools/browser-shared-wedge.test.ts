@@ -464,7 +464,7 @@ describe("shared browser reachability check", () => {
 	});
 
 	it("settles and frees its single-flight slot when the CDP connect never opens", async () => {
-		// `rawHttpGet` awaits `Bun.connect` before its own timer can settle the
+		// `loopbackGet` awaits `Bun.connect` before its own timer can settle the
 		// call, so a stalled connect used to pin the check (and every later
 		// cleanup that joined it) indefinitely.
 		const connect = Promise.withResolvers<unknown>();

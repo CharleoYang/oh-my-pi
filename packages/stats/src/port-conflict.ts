@@ -1,7 +1,7 @@
 import type { Dirent } from "node:fs";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { $which } from "@oh-my-pi/pi-utils";
+import { $which, loopbackGet } from "@oh-my-pi/pi-utils";
 import { $ } from "bun";
 
 const STATS_PROBE_TIMEOUT_MS = 500;
@@ -28,32 +28,34 @@ export const STATS_DASHBOARD_HOSTNAME = "127.0.0.1";
 
 type StatsDashboardProbe = "reusable" | "replaceable" | "occupied" | "unreachable";
 
+/**
+ * Classify whatever answers HTTP on the port. Uses {@link loopbackGet} because
+ * `fetch` routes loopback through `HTTP_PROXY`, whose reply would make a free
+ * port look occupied.
+ */
 async function probeStatsDashboard(port: number, hostname: string): Promise<StatsDashboardProbe> {
 	const probeHostname = hostname === "0.0.0.0" ? STATS_DASHBOARD_HOSTNAME : hostname === "::" ? "::1" : hostname;
 	const urlHostname = probeHostname.includes(":") ? `[${probeHostname}]` : probeHostname;
-	try {
-		const response = await fetch(`http://${urlHostname}:${port}/api/stats/models`, {
-			signal: AbortSignal.timeout(STATS_PROBE_TIMEOUT_MS),
-		});
-		const dashboardVersionHeader = response.headers.get(STATS_DASHBOARD_HEADER);
-		const dashboardVersion = dashboardVersionHeader === null ? Number.NaN : Number(dashboardVersionHeader);
-		// Never replace a newer dashboard: an older CLI must not downgrade it.
-		const replaceable =
-			response.status === 200 &&
-			Number.isSafeInteger(dashboardVersion) &&
-			dashboardVersion > 0 &&
-			dashboardVersion <= Number(STATS_DASHBOARD_SECURITY_VERSION);
-		const reusable =
-			response.status === 200 &&
-			dashboardVersionHeader === STATS_DASHBOARD_SECURITY_VERSION &&
-			response.headers.get(STATS_DASHBOARD_HOSTNAME_HEADER) === hostname &&
-			!response.headers.has("Access-Control-Allow-Origin");
-		await response.body?.cancel();
-		if (reusable) return "reusable";
-		return replaceable ? "replaceable" : "occupied";
-	} catch {
-		return "unreachable";
-	}
+	const response = await loopbackGet(`http://${urlHostname}:${port}/api/stats/models`, {
+		timeoutMs: STATS_PROBE_TIMEOUT_MS,
+		readBody: false,
+	});
+	if (!response) return "unreachable";
+	const dashboardVersionHeader = response.headers.get(STATS_DASHBOARD_HEADER);
+	const dashboardVersion = dashboardVersionHeader === null ? Number.NaN : Number(dashboardVersionHeader);
+	// Never replace a newer dashboard: an older CLI must not downgrade it.
+	const replaceable =
+		response.status === 200 &&
+		Number.isSafeInteger(dashboardVersion) &&
+		dashboardVersion > 0 &&
+		dashboardVersion <= Number(STATS_DASHBOARD_SECURITY_VERSION);
+	const reusable =
+		response.status === 200 &&
+		dashboardVersionHeader === STATS_DASHBOARD_SECURITY_VERSION &&
+		response.headers.get(STATS_DASHBOARD_HOSTNAME_HEADER) === hostname &&
+		!response.headers.has("Access-Control-Allow-Origin");
+	if (reusable) return "reusable";
+	return replaceable ? "replaceable" : "occupied";
 }
 
 async function findLinuxPortHolder(port: number): Promise<PortHolder | null> {

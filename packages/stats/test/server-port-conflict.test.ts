@@ -144,6 +144,43 @@ describe("startServer port conflicts", () => {
 		}
 	});
 
+	it("binds a free port when HTTP_PROXY answers loopback requests", async () => {
+		// Regression for #15615: Bun's fetch routes loopback probes through HTTP_PROXY,
+		// so the proxy's reply made a free port look occupied and startup aborted.
+		const proxy = Bun.serve({
+			port: 0,
+			hostname: STATS_DASHBOARD_HOSTNAME,
+			fetch: () => new Response("Bad Gateway", { status: 502 }),
+		});
+		const reservation = Bun.serve({ port: 0, hostname: STATS_DASHBOARD_HOSTNAME, fetch: () => new Response("") });
+		const port = reservation.port;
+		reservation.stop(true);
+
+		const proxyKeys = ["HTTP_PROXY", "http_proxy", "NO_PROXY", "no_proxy"] as const;
+		const saved = proxyKeys.map(key => process.env[key]);
+		process.env.HTTP_PROXY = `http://${STATS_DASHBOARD_HOSTNAME}:${proxy.port}`;
+		process.env.http_proxy = process.env.HTTP_PROXY;
+		process.env.NO_PROXY = "";
+		process.env.no_proxy = "";
+		try {
+			const server = await startServer(port);
+			try {
+				expect(server.port).toBe(port);
+				expect(await tcpConnects(STATS_DASHBOARD_HOSTNAME, port)).toBe(true);
+			} finally {
+				server.stop();
+			}
+		} finally {
+			// Bun's fetch keeps a deleted proxy var active process-wide; only assignment
+			// flushes it, so write "" first, then restore the JS view.
+			proxyKeys.forEach((key, index) => {
+				process.env[key] = saved[index] ?? "";
+				if (saved[index] === undefined) delete process.env[key];
+			});
+			await proxy.stop(true);
+		}
+	});
+
 	it("reuses a live stats dashboard identified by its header", async () => {
 		const existing = Bun.serve({
 			port: 0,

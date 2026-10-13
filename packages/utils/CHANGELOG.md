@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added `loopbackGet()`, a raw-TCP HTTP GET for probing local services that ignores `HTTP_PROXY`.
+
 ## [18.10.0] - 2026-10-12
 
 ### Added

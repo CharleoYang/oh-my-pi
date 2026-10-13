@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed `omp stats` failing with "Port N is in use, but the listening process could not be identified" on a free port when `HTTP_PROXY` is set ([#15615](https://github.com/can1357/oh-my-pi/issues/15615)).
+
 ## [18.9.0] - 2026-10-11
 
 ### Fixed
