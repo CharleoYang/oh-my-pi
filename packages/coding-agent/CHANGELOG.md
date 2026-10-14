@@ -13,6 +13,10 @@
 
 - Background task guidance now lives in the Task tool description (and in same-name extension replacements that delegate to Task) instead of being repeated in every spawn acknowledgment ([#15477](https://github.com/can1357/oh-my-pi/pull/15477) by [@iliaal](https://github.com/iliaal))
 
+### Fixed
+
+- Compiled OMP extensions importing `@oh-my-pi/pi-tui` subpaths such as `terminal-capabilities`, `chat/svg-figure`, or `theme/index` now share the host's terminal, theme, and figure state instead of loading a second copy from their own `node_modules` ([#15659](https://github.com/can1357/oh-my-pi/issues/15659))
+
 ## [18.10.4] - 2026-10-13
 
 ### Added
