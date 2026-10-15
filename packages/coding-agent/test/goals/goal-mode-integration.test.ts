@@ -6,6 +6,7 @@ import { AssistantMessageEventStream } from "@oh-my-pi/pi-ai/utils/event-stream"
 import * as vcs from "@oh-my-pi/pi-natives/vcs";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { GoalCompletionRefusedError } from "@oh-my-pi/pi-coding-agent/goals/admission";
 import { GoalTool } from "@oh-my-pi/pi-coding-agent/goals/tools/goal-tool";
 import { cfgGoalContinuationModes } from "@oh-my-pi/pi-coding-agent/goals/settings";
 import { ExtensionRuntime, loadExtensionFromFactory } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/loader";
@@ -173,7 +174,7 @@ async function armInputWaiter(mode: InteractiveMode): Promise<{
 }
 
 /** Replace only provider I/O; prompt ownership, queue polling, admission, and receipt commits stay real. */
-function recordProviderRequests(session: AgentSession): string[] {
+function recordProviderRequests(session: AgentSession, finish?: Promise<void>): string[] {
 	const requests: string[] = [];
 	session.agent.streamFn = (_model, context) => {
 		requests.push(JSON.stringify(context.messages));
@@ -191,8 +192,9 @@ function recordProviderRequests(session: AgentSession): string[] {
 			timestamp: Date.now(),
 		};
 		const stream = new AssistantMessageEventStream();
-		queueMicrotask(() => {
+		queueMicrotask(async () => {
 			stream.push({ type: "start", partial: message });
+			if (finish) await finish;
 			stream.push({ type: "done", reason: "stop", message });
 		});
 		return stream;
@@ -1508,6 +1510,102 @@ describe("InteractiveMode goal mode integration", () => {
 		if (invalidation === "retired") native.retirePreparedRun(identity.runId);
 		expect(native.getPreparedRunId()).toBeUndefined();
 		await expect(native.control({ op: "complete", expectedGoalId: state!.goal.id })).rejects.toThrow("real matching submitted run");
+	});
+
+	it("cancelled native intent reports its real state instead of submitted proof", async () => {
+		const entered = Promise.withResolvers<void>();
+		const release = Promise.withResolvers<void>();
+		let context: GoalGuardContext | undefined;
+		const beforeComplete = vi.fn(async () => ({ decision: "allow" as const }));
+		harness.registerGuard("trusted", {
+			beforeRun: async value => { context = value; return { decision: "allow", additionalContext: "Authorized native execution" }; },
+			beforeComplete,
+		});
+		const native = harness.runner.createContext().goal;
+		const state = await native.control({ op: "create", objective: "Cancel durable intent", continuationGuard: "trusted", paused: true });
+		await native.control({ op: "resume", expectedGoalId: state!.goal.id });
+		const manager = harness.session.sessionManager;
+		const flush = manager.flush.bind(manager);
+		let delayed = false;
+		// Keep the real disk write; hold only its acknowledgement to exercise cancellation.
+		vi.spyOn(manager, "flush").mockImplementation(async () => {
+			await flush();
+			const latest = manager.getBranch().at(-1);
+			if (!delayed && latest?.type === "custom" && latest.customType === "goal-run-intent") {
+				delayed = true;
+				entered.resolve();
+				await release.promise;
+			}
+		});
+		const requests = recordProviderRequests(harness.session);
+		const pending = harness.session.promptCustomMessage({ customType: "goal-continuation", content: "continue", display: false });
+		await entered.promise;
+		try {
+			await expect(native.control({ op: "complete", expectedGoalId: state!.goal.id })).rejects.toMatchObject({
+				code: "GOAL_COMPLETION_REQUIRES_SUBMITTED_RUN", state: "intent", runId: context!.runId,
+			});
+			await harness.session.abort();
+		} finally {
+			release.resolve();
+		}
+		expect(await pending).toBe(false);
+		expect(context!.signal.aborted).toBe(true);
+		expect(requests).toHaveLength(0);
+		expect(native.getLatestRunId()).toBeUndefined();
+		expect(native.getPreparedRunId()).toBe(context!.runId);
+		const persisted = (await Bun.file(manager.getSessionFile()!).text()).split("\n").filter(Boolean).map(line => JSON.parse(line));
+		expect(persisted.filter(entry => entry.customType === "goal-run-intent")).toHaveLength(1);
+		expect(persisted.filter(entry => entry.customType === "goal-run")).toHaveLength(0);
+		const refusal = await native.control({ op: "complete", expectedGoalId: state!.goal.id }).then(() => undefined, error => error);
+		console.log("cancelled-intent reproduction", JSON.stringify({ name: refusal?.name, code: refusal?.code, state: refusal?.state, message: refusal?.message, intents: 1, submitted: 0, providerRequests: requests.length }));
+		expect(refusal).toBeInstanceOf(GoalCompletionRefusedError);
+		expect(refusal).toMatchObject({ name: "GoalCompletionRefusedError", code: "GOAL_COMPLETION_REQUIRES_SUBMITTED_RUN", state: "cancelled-intent", runId: context!.runId });
+		expect(beforeComplete).not.toHaveBeenCalled();
+		expect(manager.getBranch().filter(entry => entry.type === "custom" && entry.customType === "goal-completed")).toHaveLength(0);
+	});
+
+	it.each(["submitted", "submitted-then-completed"] as const)("%s run remains real completion proof", async timing => {
+		const dispatched = Promise.withResolvers<void>();
+		const finish = Promise.withResolvers<void>();
+		let context: GoalGuardContext | undefined;
+		const beforeComplete = vi.fn(async (value: GoalGuardContext) => {
+			expect(value.runId).toBe(context!.runId);
+			return { decision: "allow" as const };
+		});
+		harness.registerGuard("trusted", {
+			beforeRun: async value => { context = value; return { decision: "allow", additionalContext: "Authorized native execution" }; },
+			beforeComplete,
+		});
+		const native = harness.runner.createContext().goal;
+		const state = await native.control({ op: "create", objective: "Keep submitted proof", continuationGuard: "trusted", paused: true });
+		await native.control({ op: "resume", expectedGoalId: state!.goal.id });
+		const requests = recordProviderRequests(harness.session, finish.promise);
+		const provider = harness.session.agent.streamFn!;
+		harness.session.agent.streamFn = (...args) => { dispatched.resolve(); return provider(...args); };
+		const pending = harness.session.promptCustomMessage({ customType: "goal-continuation", content: "continue", display: false });
+		await dispatched.promise;
+		try {
+			if (timing === "submitted-then-completed") {
+				finish.resolve();
+				expect(await pending).toBe(true);
+				await harness.session.waitForIdle();
+				expect(harness.session.agent.state.isStreaming).toBe(false);
+			} else {
+				expect(harness.session.agent.state.isStreaming).toBe(true);
+			}
+			expect(requests).toHaveLength(1);
+			expect(native.getLatestRunId()).toBe(context!.runId);
+			expect(native.getPreparedRunId()).toBeUndefined();
+			expect(harness.session.sessionManager.getBranch().filter(entry => entry.type === "custom" && entry.customType === "goal-run")).toHaveLength(1);
+			await native.control({ op: "complete", expectedGoalId: state!.goal.id });
+			expect(beforeComplete).toHaveBeenCalledTimes(1);
+			expect(native.getState()?.goal.status).toBe("complete");
+			expect(native.getLatestRunId()).toBe(context!.runId);
+			console.log("submitted-proof control", JSON.stringify({ timing, submitted: 1, providerRequests: requests.length, completionGuardCalls: beforeComplete.mock.calls.length, goalStatus: native.getState()?.goal.status }));
+		} finally {
+			finish.resolve();
+			await pending;
+		}
 	});
 
 	it("late editor rejection during intent flush preserves prepared proof without submitted proof", async () => {
