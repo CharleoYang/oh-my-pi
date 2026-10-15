@@ -604,6 +604,7 @@ describe("advisor", () => {
 				isStreaming: () => false,
 				injectIdle: async messages => {
 					injected.push(...messages);
+					return true;
 				},
 				scheduleIdleFlush: () => {},
 			});
@@ -639,7 +640,7 @@ describe("advisor", () => {
 			let scheduled = 0;
 			const yq = new YieldQueue({
 				isStreaming: () => false,
-				injectIdle: async () => {},
+				injectIdle: async () => true,
 				scheduleIdleFlush: () => {
 					scheduled++;
 				},
@@ -661,7 +662,7 @@ describe("advisor", () => {
 		it("clear(kind) drops only that kind's queued entries", () => {
 			const yq = new YieldQueue({
 				isStreaming: () => false,
-				injectIdle: async () => {},
+				injectIdle: async () => true,
 				scheduleIdleFlush: () => {},
 			});
 			yq.register<{ note: string }>("advisor", {

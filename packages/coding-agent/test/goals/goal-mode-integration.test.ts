@@ -7,13 +7,21 @@ import * as vcs from "@oh-my-pi/pi-natives/vcs";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { GoalTool } from "@oh-my-pi/pi-coding-agent/goals/tools/goal-tool";
+import { cfgGoalContinuationModes } from "@oh-my-pi/pi-coding-agent/goals/settings";
+import { ExtensionRuntime, loadExtensionFromFactory } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/loader";
+import { ExtensionRunner } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/runner";
+import type { ExtensionAPI, GoalGuard, GoalGuardContext, GoalRunDecision } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/types";
+import { RpcGoalController } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-goal";
+import { EventBus } from "@oh-my-pi/pi-coding-agent/utils/event-bus";
 import { InteractiveMode } from "@oh-my-pi/pi-coding-agent/modes/interactive-mode";
 import { initTheme } from "@oh-my-pi/pi-tui/theme";
 import type { SubmittedUserInput } from "@oh-my-pi/pi-coding-agent/modes/types";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
-import { normalizeCustomMessagePayload } from "@oh-my-pi/pi-coding-agent/session/messages";
+import { IrcBridge } from "@oh-my-pi/pi-coding-agent/session/irc-bridge";
+import { convertToLlm, normalizeCustomMessagePayload } from "@oh-my-pi/pi-coding-agent/session/messages";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
+import { FileSessionStorage, type SessionStorage } from "@oh-my-pi/pi-coding-agent/session/session-storage";
 import { executeBuiltinSlashCommand } from "@oh-my-pi/pi-coding-agent/slash-commands/builtin-registry";
 import { createTools, type Tool, type ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import type { TodoPhase } from "@oh-my-pi/pi-tui/tools/todo";
@@ -37,6 +45,8 @@ type GoalHarness = {
 	mode: InteractiveMode;
 	toolSession: ToolSession;
 	toolRegistry: Map<string, Tool>;
+	runner: ExtensionRunner;
+	registerGuard: ExtensionAPI["registerGoalGuard"];
 	cleanup: () => Promise<void>;
 };
 
@@ -66,7 +76,7 @@ async function createSharedFixture(): Promise<SharedFixture> {
 	return { authStorage, modelRegistry, model, baseDir };
 }
 
-async function createGoalHarness(shared: SharedFixture): Promise<GoalHarness> {
+async function createGoalHarness(shared: SharedFixture, storage?: SessionStorage): Promise<GoalHarness> {
 	resetSettingsForTest();
 	const tempDir = TempDir.createSync("@pi-goal-mode-");
 	await Settings.init({ inMemory: true, cwd: tempDir.path() });
@@ -80,9 +90,16 @@ async function createGoalHarness(shared: SharedFixture): Promise<GoalHarness> {
 	const bootstrapToolSession = createToolSession(tempDir.path(), settings);
 	const initialTools = await createTools(bootstrapToolSession, ["read"]);
 	const toolRegistry = new Map<string, Tool>(initialTools.map(tool => [tool.name, tool] as const));
+	const sessionManager = SessionManager.create(tempDir.path(), tempDir.path(), storage);
+	const runtime = new ExtensionRuntime();
+	let registerGuard: ExtensionAPI["registerGoalGuard"] | undefined;
+	const extension = await loadExtensionFromFactory(pi => { registerGuard = pi.registerGoalGuard; }, tempDir.path(), new EventBus(), runtime, "native-goal-test");
+	if (!registerGuard) throw new Error("Missing factory registration method");
+	const runner = new ExtensionRunner([extension], runtime, tempDir.path(), sessionManager, modelRegistry, undefined, settings);
 
 	const session = new AgentSession({
 		agent: new Agent({
+			convertToLlm,
 			initialState: {
 				model,
 				systemPrompt: ["Test"],
@@ -90,7 +107,8 @@ async function createGoalHarness(shared: SharedFixture): Promise<GoalHarness> {
 				messages: [],
 			},
 		}),
-		sessionManager: SessionManager.create(tempDir.path(), tempDir.path()),
+		sessionManager,
+		extensionRunner: runner,
 		settings,
 		modelRegistry,
 		toolRegistry,
@@ -115,6 +133,8 @@ async function createGoalHarness(shared: SharedFixture): Promise<GoalHarness> {
 		mode,
 		toolSession,
 		toolRegistry,
+		runner,
+		registerGuard,
 		cleanup: async () => {
 			mode.stop();
 			await session.dispose();
@@ -151,6 +171,43 @@ async function armInputWaiter(mode: InteractiveMode): Promise<{
 		getResolvedInput: () => resolvedInput,
 	};
 }
+
+/** Replace only provider I/O; prompt ownership, queue polling, admission, and receipt commits stay real. */
+function recordProviderRequests(session: AgentSession): string[] {
+	const requests: string[] = [];
+	session.agent.streamFn = (_model, context) => {
+		requests.push(JSON.stringify(context.messages));
+		const message = {
+			role: "assistant" as const,
+			content: [{ type: "text" as const, text: "Delivered the queued work." }],
+			api: "anthropic-messages" as const,
+			provider: "anthropic" as const,
+			model: "claude-sonnet-4-5",
+			usage: {
+				input: 1, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 2,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+			stopReason: "stop" as const,
+			timestamp: Date.now(),
+		};
+		const stream = new AssistantMessageEventStream();
+		queueMicrotask(() => {
+			stream.push({ type: "start", partial: message });
+			stream.push({ type: "done", reason: "stop", message });
+		});
+		return stream;
+	};
+	return requests;
+}
+
+async function settleIrcWake(session: AgentSession): Promise<void> {
+	for (let attempt = 0; session.isStreaming && attempt < 1_000; attempt++) {
+		await new Promise<void>(resolve => setImmediate(resolve));
+	}
+	expect(session.isStreaming).toBe(false);
+	await session.waitForIdle();
+}
+
 
 describe("InteractiveMode goal mode integration", () => {
 	let harness: GoalHarness;
@@ -820,5 +877,714 @@ describe("InteractiveMode goal mode integration", () => {
 
 		harness.mode.onInputCallback?.(harness.mode.startPendingSubmission({ text: "next turn" }));
 		await nextTurn;
+	});
+	it("TUI guarded continuation consumes native admission and cannot spend a turn on block", async () => {
+		vi.spyOn(vcs, "repo").mockReturnValue(null);
+		vi.spyOn(vcs, "git").mockReturnValue(null);
+		await harness.mode.init({ suppressWelcomeIntro: true });
+		let runContext: GoalGuardContext | undefined;
+		harness.registerGuard("trusted", { beforeRun: async context => { runContext = context; return { decision: "block", reason: "lease conflict" }; }, beforeComplete: async () => ({ decision: "block", reason: "unsettled" }) });
+		const native = harness.runner.createContext().goal;
+		const created = await native.control({ op: "create", objective: "Ship safely", continuationGuard: "trusted", paused: true });
+		const prompt = vi.spyOn(harness.session.agent, "prompt").mockResolvedValue();
+		await native.control({ op: "resume", expectedGoalId: created!.goal.id });
+		expect(await harness.session.promptCustomMessage({ customType: "goal-continuation", content: "continue", display: false })).toBe(false);
+		expect(runContext?.runId).toBeTruthy();
+		expect(prompt).not.toHaveBeenCalled();
+		expect(native.getState()?.goal.status).toBe("paused");
+		expect(harness.session.sessionManager.getBranch().filter(entry => entry.type === "custom" && entry.customType === "goal-run")).toHaveLength(0);
+	});
+
+	it.each(["before-append", "after-append"] as const)("intent journal failure %s stops the real session before provider execution or completion", async timing => {
+		await harness.cleanup();
+		const storage = new FileSessionStorage();
+		const openWriter = storage.openWriter.bind(storage);
+		let failed = false;
+		vi.spyOn(storage, "openWriter").mockImplementation((file, options) => {
+			const writer = openWriter(file, options);
+			return {
+				append: line => writer.append(line),
+				appendSync: line => {
+					if (!failed && JSON.parse(line).customType === "goal-run-intent") {
+						failed = true;
+						if (timing === "after-append") writer.appendSync!(line);
+						throw new Error("run intent storage failure");
+					}
+					writer.appendSync!(line);
+				},
+				flush: () => writer.flush(),
+				flushSync: () => writer.flushSync?.(),
+				isOpen: () => writer.isOpen(),
+				close: () => writer.close(),
+				getError: () => writer.getError(),
+			};
+		});
+		harness = await createGoalHarness(shared, storage);
+		let preparedContext: GoalGuardContext | undefined;
+		const beforeComplete = vi.fn(async () => ({ decision: "allow" as const }));
+		harness.registerGuard("trusted", {
+			beforeRun: async context => {
+				preparedContext = context;
+				const durable = await SessionManager.open(harness.session.sessionManager.getSessionFile()!);
+				expect(durable.getBranch()).toContainEqual(expect.objectContaining({ customType: "goal-admission-prepared", data: expect.objectContaining({ runId: context.runId }) }));
+				await durable.close();
+				return { decision: "allow", additionalContext: "Authorized native execution" };
+			},
+			beforeComplete,
+		});
+		const native = harness.runner.createContext().goal;
+		const state = await native.control({ op: "create", objective: "Commit before executing", continuationGuard: "trusted", paused: true });
+		await native.control({ op: "resume", expectedGoalId: state!.goal.id });
+		const requests = recordProviderRequests(harness.session);
+		await expect(harness.session.prompt("Execute authorized work")).rejects.toThrow("run intent storage failure");
+		expect(preparedContext?.runId).toBeTruthy();
+		expect(failed).toBe(true);
+		expect(requests).toHaveLength(0);
+		expect(native.getState()?.goal.status).toBe("paused");
+		expect(native.getLatestRunId()).toBeUndefined();
+		expect(native.getPreparedRunId()).toBe(preparedContext!.runId);
+		expect(harness.session.sessionManager.getBranch().filter(entry => entry.type === "custom" && entry.customType === "goal-run")).toHaveLength(0);
+		await expect(native.control({ op: "complete", expectedGoalId: state!.goal.id })).rejects.toThrow("real matching submitted run");
+		expect(beforeComplete).not.toHaveBeenCalled();
+		expect(harness.session.sessionManager.getBranch().filter(entry => entry.type === "custom" && entry.customType === "goal-completed")).toHaveLength(0);
+	});
+
+	it.each(["editor", "policy"] as const)("TUI %s rejection parks durable identity and readmits it before one real submission", async rejection => {
+		const entered = Promise.withResolvers<void>();
+		const allow = Promise.withResolvers<GoalRunDecision>();
+		const contexts: GoalGuardContext[] = [];
+		let completionContext: GoalGuardContext | undefined;
+		let policyAvailable = true;
+		harness.registerGuard("trusted", {
+			beforeRun: async context => {
+				contexts.push(context);
+				expect(native.getPreparedRunId()).toBe(context.runId);
+				const journal = await Bun.file(harness.session.sessionManager.getSessionFile()!).text();
+				expect(journal.split("\n").filter(Boolean).map(line => JSON.parse(line))).toContainEqual(expect.objectContaining({ customType: "goal-admission-prepared", data: { goalId: context.goal.goal.id, continuationGuard: "trusted", sessionId: context.sessionId, runId: context.runId } }));
+				if (contexts.length === 1) { entered.resolve(); return allow.promise; }
+				return { decision: "allow", additionalContext: "requalified native context" };
+			},
+			beforeComplete: async context => { completionContext = context; return { decision: "allow" }; },
+		});
+		const native = harness.runner.createContext().goal;
+		const state = await native.control({ op: "create", objective: "Native work", continuationGuard: "trusted", paused: true });
+		await native.control({ op: "resume", expectedGoalId: state!.goal.id });
+		if (rejection === "policy") harness.session.setGoalSubmissionAvailability(() => policyAvailable);
+		const prompt = vi.spyOn(harness.session.agent, "prompt").mockResolvedValue();
+		const submitted = harness.session.promptCustomMessage({ customType: "goal-continuation", content: "continue", display: false });
+		await entered.promise;
+		if (rejection === "editor") harness.mode.editor.setText("operator input");
+		else policyAvailable = false;
+		allow.resolve({ decision: "allow", additionalContext: "native context" });
+		expect(await submitted).toBe(false);
+		expect(prompt).not.toHaveBeenCalled();
+		expect(native.getPreparedRunId()).toBe(contexts[0].runId);
+		expect(native.getLatestRunId()).toBeUndefined();
+		expect(native.getState()?.goal).toMatchObject({ tokensUsed: 0, timeUsedSeconds: 0 });
+		expect(harness.session.sessionManager.getBranch().filter(entry => entry.type === "custom" && entry.customType === "goal-run")).toHaveLength(0);
+		await expect(native.control({ op: "complete", expectedGoalId: state!.goal.id })).rejects.toThrow("real matching submitted run");
+		harness.mode.editor.setText("");
+		policyAvailable = true;
+		expect(await harness.session.promptCustomMessage({ customType: "goal-continuation", content: "continue", display: false })).toBe(true);
+		expect(contexts).toHaveLength(2);
+		expect(contexts[1].runId).toBe(contexts[0].runId);
+		expect(contexts[1].signal).not.toBe(contexts[0].signal);
+		expect(contexts[1].signal.aborted).toBe(false);
+		expect(prompt).toHaveBeenCalledTimes(1);
+		expect(native.getPreparedRunId()).toBeUndefined();
+		expect(native.getLatestRunId()).toBe(contexts[0].runId);
+		expect(harness.session.sessionManager.getBranch().filter(entry => entry.type === "custom" && entry.customType === "goal-admission-prepared")).toHaveLength(1);
+		expect(harness.session.sessionManager.getBranch().filter(entry => entry.type === "custom" && entry.customType === "goal-run")).toHaveLength(1);
+		await native.control({ op: "complete", expectedGoalId: state!.goal.id });
+		expect(completionContext?.runId).toBe(contexts[0].runId);
+	});
+
+	it("a guarded queued operator drain consumes its own queue through the real Agent loop", async () => {
+		const contexts: GoalGuardContext[] = [];
+		harness.registerGuard("trusted", {
+			beforeRun: async context => {
+				contexts.push(context);
+				expect(harness.session.queuedMessageCount).toBe(1);
+				return { decision: "allow", additionalContext: "Authorized operator delivery" };
+			},
+			beforeComplete: async () => ({ decision: "allow" }),
+		});
+		const native = harness.runner.createContext().goal;
+		const state = await native.control({ op: "create", objective: "Native queued work", continuationGuard: "trusted", paused: true });
+		await native.control({ op: "resume", expectedGoalId: state!.goal.id });
+		const requests = recordProviderRequests(harness.session);
+		await harness.session.steer("Queued operator instruction");
+		await harness.session.waitForIdle();
+		expect(contexts).toHaveLength(1);
+		expect(requests).toHaveLength(1);
+		expect(requests[0]).toContain("Queued operator instruction");
+		expect(harness.session.queuedMessageCount).toBe(0);
+		expect(harness.session.agent.hasQueuedMessages()).toBe(false);
+		expect(harness.session.sessionManager.getBranch().filter(entry => entry.type === "custom" && entry.customType === "goal-run")).toHaveLength(1);
+		await harness.session.sessionManager.flush();
+		const restored = await SessionManager.open(harness.session.sessionManager.getSessionFile()!);
+		const restoredSession = new AgentSession({
+			agent: new Agent({ convertToLlm, initialState: { model: shared.model, systemPrompt: ["Test"], tools: [], messages: [] } }),
+			sessionManager: restored,
+			extensionRunner: harness.runner,
+			settings: harness.settings,
+			modelRegistry: shared.modelRegistry,
+			toolRegistry: harness.toolRegistry,
+			rebuildSystemPrompt: async () => ({ systemPrompt: ["Test"] }),
+		});
+		try {
+			expect(restored.getSessionId()).toBe(contexts[0].sessionId);
+			expect(restored.getBranch()).toContainEqual(expect.objectContaining({ customType: "goal-run", data: { goalId: state!.goal.id, continuationGuard: "trusted", sessionId: contexts[0].sessionId, runId: contexts[0].runId } }));
+			expect(restoredSession.getGoalModeState()).toMatchObject({ enabled: false, goal: { id: state!.goal.id, status: "paused" } });
+			const reloadedRequests = recordProviderRequests(restoredSession);
+			expect(await restoredSession.promptCustomMessage({ customType: "goal-continuation", content: "Do not replay an uncertain run", display: false })).toBe(false);
+			expect(reloadedRequests).toHaveLength(0);
+		} finally {
+			await restoredSession.dispose();
+		}
+	});
+
+	it.each(["guard", "intent"] as const)("guarded IRC wake defers pooled ownership acquired during %s admission", async timing => {
+		const entered = Promise.withResolvers<void>();
+		const allow = Promise.withResolvers<GoalRunDecision>();
+		const releaseIntent = Promise.withResolvers<void>();
+		const manager = harness.session.sessionManager;
+		const flush = manager.flush.bind(manager);
+		let heldIntent = false;
+		vi.spyOn(manager, "flush").mockImplementation(async () => {
+			await flush();
+			const latest = manager.getBranch().at(-1);
+			if (timing === "intent" && !heldIntent && latest?.type === "custom" && latest.customType === "goal-run-intent") {
+				heldIntent = true;
+				entered.resolve();
+				await releaseIntent.promise;
+			}
+		});
+		harness.registerGuard("trusted", {
+			beforeRun: async () => {
+				if (timing === "intent") return { decision: "allow", additionalContext: "Authorized IRC delivery" };
+				entered.resolve();
+				return allow.promise;
+			},
+			beforeComplete: async () => ({ decision: "allow" }),
+		});
+		const native = harness.runner.createContext().goal;
+		const state = await native.control({ op: "create", objective: "Preserve IRC ownership", continuationGuard: "trusted", paused: true });
+		await native.control({ op: "resume", expectedGoalId: state!.goal.id });
+		const requests: string[] = [];
+		vi.spyOn(harness.session.agent, "prompt").mockImplementation(async messages => { requests.push(JSON.stringify(messages)); });
+		let observations = 0;
+		harness.session.setIrcWakeTurnObserver(() => { observations++; return undefined; });
+		await harness.session.deliverIrcMessage({ id: "guarded-pool-race", from: "Peer", to: "Main", body: "Deferred guarded IRC wake", ts: Date.now() });
+		await entered.promise;
+		await harness.session.setWorkPoolYieldItems([{ id: "pool#1", index: 1 }]);
+		allow.resolve({ decision: "allow", additionalContext: "Authorized IRC delivery" });
+		releaseIntent.resolve();
+		await settleIrcWake(harness.session);
+		expect(requests).toHaveLength(0);
+		expect(observations).toBe(0);
+		expect(harness.session.sessionManager.getBranch().filter(entry => entry.type === "custom" && entry.customType === "goal-run")).toHaveLength(0);
+		await harness.session.setWorkPoolYieldItems([]);
+		await settleIrcWake(harness.session);
+		expect(requests).toHaveLength(1);
+		expect(requests[0]).toContain("Deferred guarded IRC wake");
+		expect(observations).toBe(1);
+	});
+
+	it("guarded IRC wake joins a replacement empty contract's pending prompt rebuild", async () => {
+		const entered = Promise.withResolvers<void>();
+		const allow = Promise.withResolvers<GoalRunDecision>();
+		harness.registerGuard("trusted", {
+			beforeRun: async () => { entered.resolve(); return allow.promise; },
+			beforeComplete: async () => ({ decision: "allow" }),
+		});
+		const native = harness.runner.createContext().goal;
+		const state = await native.control({ op: "create", objective: "Await replacement prompt", continuationGuard: "trusted", paused: true });
+		await native.control({ op: "resume", expectedGoalId: state!.goal.id });
+		const prompt = vi.spyOn(harness.session.agent, "prompt").mockResolvedValue();
+		await harness.session.deliverIrcMessage({ id: "guarded-rebuild-race", from: "Peer", to: "Main", body: "Wake after the prompt rebuild", ts: Date.now() });
+		await entered.promise;
+		await harness.session.setWorkPoolYieldItems([{ id: "pool#1", index: 1 }]);
+		const rebuilt = Promise.withResolvers<void>();
+		vi.spyOn(harness.session, "refreshBaseSystemPrompt").mockImplementationOnce(() => rebuilt.promise);
+		const clearing = harness.session.setWorkPoolYieldItems([]);
+		const deferred = Promise.withResolvers<void>();
+		const queueAside = IrcBridge.prototype.queueAside;
+		vi.spyOn(IrcBridge.prototype, "queueAside").mockImplementation(function (this: IrcBridge, records) {
+			queueAside.call(this, records);
+			deferred.resolve();
+		});
+		allow.resolve({ decision: "allow", additionalContext: "Authorized IRC delivery" });
+		await deferred.promise;
+		expect(harness.session.getWorkPoolYieldItems()).toHaveLength(0);
+		expect(prompt).not.toHaveBeenCalled();
+		rebuilt.resolve();
+		await clearing;
+		await settleIrcWake(harness.session);
+		expect(prompt).toHaveBeenCalledTimes(1);
+		expect(JSON.stringify(prompt.mock.calls[0]?.[0])).toContain("Wake after the prompt rebuild");
+	});
+
+	it("guarded IRC wake survives rejected admission and resumes without a new message", async () => {
+		let guardCalls = 0;
+		harness.registerGuard("trusted", {
+			beforeRun: async () => ++guardCalls === 1 ? { decision: "block", reason: "temporarily unavailable" } : { decision: "allow", additionalContext: "Authorized IRC delivery" },
+			beforeComplete: async () => ({ decision: "allow" }),
+		});
+		const native = harness.runner.createContext().goal;
+		const state = await native.control({ op: "create", objective: "Preserve rejected IRC", continuationGuard: "trusted", paused: true });
+		await native.control({ op: "resume", expectedGoalId: state!.goal.id });
+		const requests = recordProviderRequests(harness.session);
+		const finished = Promise.withResolvers<void>();
+		harness.session.setIrcWakeTurnObserver(() => () => finished.resolve());
+		await harness.session.deliverIrcMessage({ id: "guarded-rejected-wake", from: "Peer", to: "Main", body: "Retained rejected IRC wake", ts: Date.now() });
+		await settleIrcWake(harness.session);
+		expect(requests).toHaveLength(0);
+		expect(native.getState()?.goal.status).toBe("paused");
+		await native.control({ op: "resume", expectedGoalId: state!.goal.id });
+		await finished.promise;
+		await harness.session.waitForIdle();
+		expect(requests).toHaveLength(1);
+		expect(requests[0]).toContain("Retained rejected IRC wake");
+		expect(guardCalls).toBe(2);
+	});
+
+	it.each(["before-guard", "during-guard"] as const)("autonomous Goal submission stays fenced by unrelated input queued %s", async timing => {
+		const entered = Promise.withResolvers<void>();
+		const allow = Promise.withResolvers<GoalRunDecision>();
+		let guardCalls = 0;
+		harness.registerGuard("trusted", {
+			beforeRun: async () => { guardCalls++; entered.resolve(); return allow.promise; },
+			beforeComplete: async () => ({ decision: "allow" }),
+		});
+		const native = harness.runner.createContext().goal;
+		const state = await native.control({ op: "create", objective: "Native autonomous work", continuationGuard: "trusted", paused: true });
+		await native.control({ op: "resume", expectedGoalId: state!.goal.id });
+		const requests = recordProviderRequests(harness.session);
+		const queueUnrelatedInput = () => harness.session.agent.followUp({ role: "user", content: "Unrelated pending operator input", timestamp: Date.now() });
+		if (timing === "before-guard") queueUnrelatedInput();
+		const submitted = harness.session.promptCustomMessage({ customType: "goal-continuation", content: "Autonomous continuation", display: false });
+		if (timing === "during-guard") {
+			await entered.promise;
+			queueUnrelatedInput();
+			allow.resolve({ decision: "allow", additionalContext: "too late" });
+		}
+		expect(await submitted).toBe(false);
+		await harness.session.waitForIdle();
+		expect(guardCalls).toBe(timing === "before-guard" ? 0 : 1);
+		expect(requests).toHaveLength(0);
+		expect(harness.session.queuedMessageCount).toBe(1);
+		expect(harness.session.sessionManager.getBranch().filter(entry => entry.type === "custom" && entry.customType === "goal-run")).toHaveLength(0);
+	});
+
+	it.each(["paused", "blocked", "final-rejected", "guard-thrown"] as const)("idle yield retains its receipt after %s admission and commits only once on actual success", async rejection => {
+		const entered = Promise.withResolvers<void>();
+		const allow = Promise.withResolvers<GoalRunDecision>();
+		let guardCalls = 0;
+		harness.registerGuard("trusted", {
+			beforeRun: async () => {
+				guardCalls++;
+				if (guardCalls === 1 && rejection === "blocked") return { decision: "block", reason: "temporarily blocked" };
+				if (guardCalls === 1 && rejection === "guard-thrown") throw new Error("guard qualification failed");
+				if (guardCalls === 1 && rejection === "final-rejected") { entered.resolve(); return allow.promise; }
+				return { decision: "allow", additionalContext: "Authorized yield delivery" };
+			},
+			beforeComplete: async () => ({ decision: "allow" }),
+		});
+		const native = harness.runner.createContext().goal;
+		const state = await native.control({ op: "create", objective: "Native yield work", continuationGuard: "trusted", paused: true });
+		if (rejection !== "paused") await native.control({ op: "resume", expectedGoalId: state!.goal.id });
+		const requests = recordProviderRequests(harness.session);
+		const original = { result: "Original retained yield result" };
+		const builds: Array<Array<typeof original>> = [];
+		harness.session.yieldQueue.register<typeof original>("native-delivery-regression", {
+			build: entries => {
+				builds.push(entries);
+				return { role: "custom", customType: "async-result", content: entries.map(entry => entry.result).join("\n"), display: true, attribution: "agent", timestamp: Date.now() };
+			},
+		});
+		let commits = 0;
+		let discards = 0;
+		const receipt = harness.session.yieldQueue.enqueueWithReceipt("native-delivery-regression", original).then(() => { commits++; }, () => { discards++; });
+		const rejectedFlush = harness.session.waitForIdle();
+		if (rejection === "final-rejected") {
+			await entered.promise;
+			harness.session.agent.followUp({ role: "user", content: "Late unrelated pending operator input", timestamp: Date.now() });
+			allow.resolve({ decision: "allow", additionalContext: "too late" });
+		}
+		await rejectedFlush;
+		await harness.session.waitForIdle();
+		expect(harness.session.yieldQueue.has("native-delivery-regression")).toBe(true);
+		expect(commits).toBe(0);
+		expect(discards).toBe(0);
+		expect(requests).toHaveLength(0);
+		expect(harness.session.sessionManager.getBranch().filter(entry => entry.type === "custom" && entry.customType === "goal-run")).toHaveLength(0);
+		if (rejection === "final-rejected") harness.session.agent.clearAllQueues();
+		if (native.getState()?.goal.status === "paused") await native.control({ op: "resume", expectedGoalId: state!.goal.id });
+		await harness.session.yieldQueue.flush("idle");
+		await receipt;
+		await harness.session.waitForIdle();
+		expect(builds).toHaveLength(2);
+		expect(builds[0]![0]).toBe(original);
+		expect(builds[1]![0]).toBe(original);
+		expect(requests).toHaveLength(1);
+		expect(requests[0]).toContain(original.result);
+		expect(commits).toBe(1);
+		expect(discards).toBe(0);
+		expect(harness.session.yieldQueue.has("native-delivery-regression")).toBe(false);
+		await harness.session.yieldQueue.flush("idle");
+		expect(requests).toHaveLength(1);
+		expect(commits).toBe(1);
+		expect(harness.session.sessionManager.getBranch().filter(entry => entry.type === "custom" && entry.customType === "goal-run")).toHaveLength(1);
+	});
+
+
+	it("RPC guarded resume consumes the same native seam and completes using the real submitted identity", async () => {
+		const dispatched = Promise.withResolvers<void>();
+		let runContext: GoalGuardContext | undefined;
+		let completionContext: GoalGuardContext | undefined;
+		harness.registerGuard("trusted", { beforeRun: async context => { runContext = context; return { decision: "allow", additionalContext: "lease-authorized context" }; }, beforeComplete: async context => { completionContext = context; return { decision: "allow" }; } });
+		const controller = new RpcGoalController(harness.session);
+		const unsubscribe = harness.session.subscribe(event => controller.observe(event));
+		vi.spyOn(harness.session.agent, "prompt").mockImplementation(async () => { dispatched.resolve(); });
+		const native = harness.runner.createContext().goal;
+		const state = await native.control({ op: "create", objective: "Native RPC work", continuationGuard: "trusted", paused: true });
+		await native.control({ op: "resume", expectedGoalId: state!.goal.id });
+		await dispatched.promise;
+		await harness.session.waitForIdle();
+		const receipt = harness.session.sessionManager.getBranch().findLast(entry => entry.type === "custom" && entry.customType === "goal-run");
+		expect(receipt?.type === "custom" && receipt.data).toMatchObject({ goalId: state!.goal.id, continuationGuard: "trusted", runId: runContext?.runId });
+		expect(runContext?.runId).toBeTruthy();
+		await native.control({ op: "complete", expectedGoalId: state!.goal.id });
+		expect(completionContext?.runId).toBe(runContext?.runId);
+		await controller.settled();
+		expect(native.getState()).toBeUndefined();
+		expect(harness.session.getEnabledToolNames()).not.toContain("goal");
+		unsubscribe();
+	});
+
+	it.each(["plan", "blocked", "host-abort"] as const)("RPC rejects a pending guard's late allow when %s policy closes", async policy => {
+		const entered = Promise.withResolvers<void>();
+		const allow = Promise.withResolvers<GoalRunDecision>();
+		const dropped = Promise.withResolvers<void>();
+		harness.registerGuard("trusted", {
+			beforeRun: async () => { entered.resolve(); return allow.promise; },
+			beforeComplete: async () => ({ decision: "allow" }),
+		});
+		const controller = new RpcGoalController(harness.session, dropped.resolve);
+		const unsubscribe = harness.session.subscribe(event => controller.observe(event));
+		const prompt = vi.spyOn(harness.session.agent, "prompt").mockResolvedValue();
+		const native = harness.runner.createContext().goal;
+		try {
+			const state = await native.control({ op: "create", objective: "Native RPC work", continuationGuard: "trusted", paused: true });
+			await native.control({ op: "resume", expectedGoalId: state!.goal.id });
+			await entered.promise;
+			expect(harness.session.hasAdmittedSubmission).toBe(true);
+			if (policy === "plan") harness.session.setPlanModeState({ enabled: true, planFilePath: path.join(harness.tempDir.path(), "plan.md") });
+			if (policy === "blocked") harness.session.setTodoPhases([
+				{ name: "Approval", tasks: [{ content: "Apply the change", status: "blocked", blocker: "Awaiting user approval" }] },
+			]);
+			if (policy === "host-abort") controller.stopForHostAbort();
+			allow.resolve({ decision: "allow", additionalContext: "too late" });
+			await dropped.promise;
+			await harness.session.waitForIdle();
+			expect(prompt).not.toHaveBeenCalled();
+			expect(controller.continuationPending).toBe(false);
+			expect(harness.session.hasAdmittedSubmission).toBe(false);
+			expect(native.getState()?.goal).toMatchObject({ status: "active", tokensUsed: 0, timeUsedSeconds: 0 });
+			expect(harness.session.sessionManager.getBranch().filter(entry => entry.type === "custom" && entry.customType === "goal-run")).toHaveLength(0);
+		} finally {
+			unsubscribe();
+		}
+	});
+
+	it("RPC admits a delayed guard allow when actionable work remains alongside newly blocked work", async () => {
+		const entered = Promise.withResolvers<GoalGuardContext>();
+		const allow = Promise.withResolvers<GoalRunDecision>();
+		const dispatched = Promise.withResolvers<void>();
+		harness.registerGuard("trusted", {
+			beforeRun: async context => { entered.resolve(context); return allow.promise; },
+			beforeComplete: async () => ({ decision: "allow" }),
+		});
+		const controller = new RpcGoalController(harness.session);
+		const unsubscribe = harness.session.subscribe(event => controller.observe(event));
+		const prompt = vi.spyOn(harness.session.agent, "prompt").mockImplementation(async () => { dispatched.resolve(); });
+		const native = harness.runner.createContext().goal;
+		try {
+			const state = await native.control({ op: "create", objective: "Native RPC work", continuationGuard: "trusted", paused: true });
+			await native.control({ op: "resume", expectedGoalId: state!.goal.id });
+			const candidate = await entered.promise;
+			harness.session.setTodoPhases([
+				{ name: "Release", tasks: [
+					{ content: "Get approval", status: "blocked", blocker: "Awaiting user approval" },
+					{ content: "Run independent checks", status: "pending" },
+				] },
+			]);
+			allow.resolve({ decision: "allow", additionalContext: "authorized" });
+			await dispatched.promise;
+			await harness.session.waitForIdle();
+			expect(prompt).toHaveBeenCalledTimes(1);
+			const receipts = harness.session.sessionManager.getBranch().filter(entry => entry.type === "custom" && entry.customType === "goal-run");
+			expect(receipts).toHaveLength(1);
+			expect(receipts[0]?.type === "custom" && receipts[0].data).toMatchObject({ goalId: state!.goal.id, runId: candidate.runId });
+		} finally {
+			unsubscribe();
+		}
+	});
+
+	it.each(["plan", "blocked"] as const)("RPC continuation %s policy does not reject an explicit user's guarded prompt", async policy => {
+		const entered = Promise.withResolvers<void>();
+		const allow = Promise.withResolvers<GoalRunDecision>();
+		harness.registerGuard("trusted", {
+			beforeRun: async () => { entered.resolve(); return allow.promise; },
+			beforeComplete: async () => ({ decision: "allow" }),
+		});
+		new RpcGoalController(harness.session);
+		const native = harness.runner.createContext().goal;
+		const state = await native.control({ op: "create", objective: "Native RPC work", continuationGuard: "trusted", paused: true });
+		await native.control({ op: "resume", expectedGoalId: state!.goal.id });
+		const prompt = vi.spyOn(harness.session.agent, "prompt").mockResolvedValue();
+		const submitted = harness.session.prompt("Explicit operator request");
+		await entered.promise;
+		if (policy === "plan") harness.session.setPlanModeState({ enabled: true, planFilePath: path.join(harness.tempDir.path(), "plan.md") });
+		if (policy === "blocked") harness.session.setTodoPhases([
+			{ name: "Approval", tasks: [{ content: "Apply the change", status: "blocked", blocker: "Awaiting user approval" }] },
+		]);
+		allow.resolve({ decision: "allow", additionalContext: "operator authorized" });
+		expect(await submitted).toBe(true);
+		expect(prompt).toHaveBeenCalledTimes(1);
+		expect(harness.session.sessionManager.getBranch().filter(entry => entry.type === "custom" && entry.customType === "goal-run")).toHaveLength(1);
+	});
+
+	it("RPC ordinary unguarded continuation still submits without a registered guard", async () => {
+		cfgGoalContinuationModes.set(harness.settings, ["rpc"]);
+		const dispatched = Promise.withResolvers<void>();
+		const controller = new RpcGoalController(harness.session);
+		const prompt = vi.spyOn(harness.session.agent, "prompt").mockImplementation(async () => { dispatched.resolve(); });
+		await controller.handle({ op: "create", objective: "Ordinary RPC work" });
+		await dispatched.promise;
+		await harness.session.waitForIdle();
+		expect(prompt).toHaveBeenCalledTimes(1);
+		expect(harness.session.getGoalModeState()?.continuationGuard).toBeUndefined();
+		expect(harness.session.sessionManager.getBranch().filter(entry => entry.type === "custom" && entry.customType === "goal-run")).toHaveLength(0);
+	});
+
+	it("factory guard ids reject duplicates and native snapshots do not mutate runtime or the journal", async () => {
+		const guard: GoalGuard = { beforeRun: async () => ({ decision: "block", reason: "not ready" }), beforeComplete: async () => ({ decision: "block", reason: "not delivered" }) };
+		harness.registerGuard("trusted", guard);
+		expect(() => harness.registerGuard("trusted", guard)).toThrow("Duplicate Goal guard");
+		const native = harness.runner.createContext().goal;
+		const state = await native.control({ op: "create", objective: "Paused creation", continuationGuard: "trusted", paused: true });
+		expect(Object.isFrozen(state)).toBe(true);
+		expect(Object.isFrozen(state!.goal)).toBe(true);
+		expect(harness.session.sessionManager.buildSessionContext().modeData).toMatchObject({ continuationGuard: "trusted", goal: { status: "paused" } });
+		await expect(native.control({ op: "complete", expectedGoalId: state!.goal.id })).rejects.toThrow("real matching submitted run");
+		await expect(native.control({ op: "pause", expectedGoalId: "different" })).rejects.toThrow("Goal identity mismatch");
+		expect(native.getState()?.goal.status).toBe("paused");
+	});
+
+	it("abort and pause/resume preserve the parked id but replace the cancelled guard signal", async () => {
+		const entered = Promise.withResolvers<GoalGuardContext>();
+		const decision = Promise.withResolvers<GoalRunDecision>();
+		const contexts: GoalGuardContext[] = [];
+		harness.registerGuard("trusted", {
+			beforeRun: async context => { contexts.push(context); if (contexts.length === 1) { entered.resolve(context); return decision.promise; } return { decision: "allow", additionalContext: "fresh qualification" }; },
+			beforeComplete: async () => ({ decision: "allow" }),
+		});
+		const native = harness.runner.createContext().goal;
+		const state = await native.control({ op: "create", objective: "Park across abort", continuationGuard: "trusted", paused: true });
+		await native.control({ op: "resume", expectedGoalId: state!.goal.id });
+		const prompt = vi.spyOn(harness.session.agent, "prompt").mockResolvedValue();
+		const pending = harness.session.promptCustomMessage({ customType: "goal-continuation", content: "continue", display: false });
+		const original = await entered.promise;
+		await harness.session.abort();
+		expect(await pending).toBe(false);
+		expect(original.signal.aborted).toBe(true);
+		expect(native.getPreparedRunId()).toBe(original.runId);
+		await native.control({ op: "pause", expectedGoalId: state!.goal.id });
+		expect(native.getPreparedRunId()).toBe(original.runId);
+		await native.control({ op: "resume", expectedGoalId: state!.goal.id });
+		expect(await harness.session.promptCustomMessage({ customType: "goal-continuation", content: "continue", display: false })).toBe(true);
+		expect(contexts[1].runId).toBe(original.runId);
+		expect(contexts[1].signal).not.toBe(original.signal);
+		expect(contexts[1].signal.aborted).toBe(false);
+		decision.resolve({ decision: "allow", additionalContext: "late cancelled allow" });
+		expect(prompt).toHaveBeenCalledTimes(1);
+		expect(native.getPreparedRunId()).toBeUndefined();
+	});
+
+	it("restart restores durable prepared proof but never treats it as completion proof", async () => {
+		let original: GoalGuardContext | undefined;
+		harness.registerGuard("trusted", { beforeRun: async context => { original = context; return { decision: "block", reason: "parked" }; }, beforeComplete: async () => ({ decision: "allow" }) });
+		const native = harness.runner.createContext().goal;
+		const state = await native.control({ op: "create", objective: "Restart admission", continuationGuard: "trusted", paused: true });
+		await native.control({ op: "resume", expectedGoalId: state!.goal.id });
+		expect(await harness.session.promptCustomMessage({ customType: "goal-continuation", content: "continue", display: false })).toBe(false);
+		const sessionFile = harness.session.sessionManager.getSessionFile()!;
+		await harness.session.dispose();
+		const sessionManager = await SessionManager.open(sessionFile);
+		const extensionRuntime = new ExtensionRuntime();
+		let restoredContext: GoalGuardContext | undefined;
+		const extension = await loadExtensionFromFactory(pi => pi.registerGoalGuard("trusted", { beforeRun: async context => { restoredContext = context; return { decision: "allow", additionalContext: "restored qualification" }; }, beforeComplete: async () => ({ decision: "allow" }) }), harness.tempDir.path(), new EventBus(), extensionRuntime, "restored-native-goal-test");
+		const runner = new ExtensionRunner([extension], extensionRuntime, harness.tempDir.path(), sessionManager, shared.modelRegistry, undefined, harness.settings);
+		const session = new AgentSession({ agent: new Agent({ initialState: { model: shared.model, systemPrompt: ["Test"], tools: [], messages: [] } }), sessionManager, extensionRunner: runner, settings: harness.settings, modelRegistry: shared.modelRegistry, toolRegistry: new Map(), rebuildSystemPrompt: async () => ({ systemPrompt: ["Test"] }) });
+		try {
+			const restored = runner.createContext().goal;
+			expect(restored.getPreparedRunId()).toBe(original!.runId);
+			expect(restored.getLatestRunId()).toBeUndefined();
+			await expect(restored.control({ op: "complete", expectedGoalId: state!.goal.id })).rejects.toThrow("real matching submitted run");
+			await restored.control({ op: "resume", expectedGoalId: state!.goal.id });
+			const prompt = vi.spyOn(session.agent, "prompt").mockResolvedValue();
+			expect(await session.promptCustomMessage({ customType: "goal-continuation", content: "continue", display: false })).toBe(true);
+			expect(restoredContext?.runId).toBe(original!.runId);
+			expect(restoredContext?.signal).not.toBe(original!.signal);
+			expect(restoredContext?.signal.aborted).toBe(false);
+			expect(prompt).toHaveBeenCalledTimes(1);
+			expect(restored.getPreparedRunId()).toBeUndefined();
+			expect(restored.getLatestRunId()).toBe(original!.runId);
+			await restored.control({ op: "complete", expectedGoalId: state!.goal.id });
+		} finally { await session.dispose(); }
+	});
+
+	it.each(["branch", "guard", "goal", "session"] as const)("prepared proof cannot cross a %s mismatch", async mismatch => {
+		let context: GoalGuardContext | undefined;
+		harness.registerGuard("trusted", { beforeRun: async candidate => { context = candidate; return { decision: "block", reason: "parked" }; }, beforeComplete: async () => ({ decision: "allow" }) });
+		const native = harness.runner.createContext().goal;
+		const state = await native.control({ op: "create", objective: "Scoped admission", continuationGuard: "trusted", paused: true });
+		await native.control({ op: "resume", expectedGoalId: state!.goal.id });
+		const beforeAdmission = harness.session.sessionManager.getLeafId()!;
+		expect(await harness.session.promptCustomMessage({ customType: "goal-continuation", content: "continue", display: false })).toBe(false);
+		expect(native.getPreparedRunId()).toBe(context!.runId);
+		if (mismatch === "branch") harness.session.sessionManager.branch(beforeAdmission);
+		if (mismatch === "guard") vi.spyOn(harness.runner, "getGoalGuard").mockReturnValue(undefined);
+		if (mismatch === "goal") { await native.control({ op: "drop", expectedGoalId: state!.goal.id }); await native.control({ op: "create", objective: "Replacement", continuationGuard: "trusted", paused: true }); }
+		if (mismatch === "session") await harness.session.newSession();
+		expect(native.getPreparedRunId()).toBeUndefined();
+		expect(() => native.retirePreparedRun(context!.runId)).toThrow("matching unsubmitted admission");
+	});
+
+	it("explicit retirement is guard-forbidden, durable, scoped, and cannot erase submitted proof", async () => {
+		const contexts: GoalGuardContext[] = [];
+		harness.registerGuard("trusted", {
+			beforeRun: async context => {
+				contexts.push(context);
+				expect(() => native.retirePreparedRun(context.runId)).toThrow("control inside a guard");
+				return contexts.length === 1 ? { decision: "block", reason: "parked settled original" } : { decision: "allow", additionalContext: "fresh native candidate" };
+			},
+			beforeComplete: async () => ({ decision: "allow" }),
+		});
+		const native = harness.runner.createContext().goal;
+		const state = await native.control({ op: "create", objective: "Retire settled preparation", continuationGuard: "trusted", paused: true });
+		await native.control({ op: "resume", expectedGoalId: state!.goal.id });
+		const prompt = vi.spyOn(harness.session.agent, "prompt").mockResolvedValue();
+		expect(await harness.session.promptCustomMessage({ customType: "goal-continuation", content: "continue", display: false })).toBe(false);
+		const parked = native.getPreparedRunId()!;
+		expect(() => native.retirePreparedRun("foreign")).toThrow("matching unsubmitted admission");
+		native.retirePreparedRun(parked);
+		expect(native.getPreparedRunId()).toBeUndefined();
+		expect(() => native.retirePreparedRun(parked)).toThrow("matching unsubmitted admission");
+		const persisted = (await Bun.file(harness.session.sessionManager.getSessionFile()!).text()).split("\n").filter(Boolean).map(line => JSON.parse(line));
+		expect(persisted).toContainEqual(expect.objectContaining({ customType: "goal-admission-retired", data: { goalId: state!.goal.id, continuationGuard: "trusted", sessionId: contexts[0].sessionId, runId: parked } }));
+		await native.control({ op: "resume", expectedGoalId: state!.goal.id });
+		expect(await harness.session.promptCustomMessage({ customType: "goal-continuation", content: "continue", display: false })).toBe(true);
+		expect(contexts[1].runId).not.toBe(parked);
+		expect(prompt).toHaveBeenCalledTimes(1);
+		expect(() => native.retirePreparedRun(contexts[1].runId)).toThrow("matching unsubmitted admission");
+		expect(native.getState()?.goal).toMatchObject({ tokensUsed: 0, timeUsedSeconds: 0 });
+		expect(harness.session.sessionManager.getBranch().filter(entry => entry.type === "custom" && entry.customType === "goal-run")).toHaveLength(1);
+		await native.control({ op: "complete", expectedGoalId: state!.goal.id });
+	});
+
+	it.each(["later-submission", "malformed", "retired"] as const)("native journal rejects %s prepared proof instead of resurrecting an older candidate", async invalidation => {
+		let context: GoalGuardContext | undefined;
+		harness.registerGuard("trusted", { beforeRun: async candidate => { context = candidate; return { decision: "block", reason: "parked" }; }, beforeComplete: async () => ({ decision: "allow" }) });
+		const native = harness.runner.createContext().goal;
+		const state = await native.control({ op: "create", objective: "Journal authority", continuationGuard: "trusted", paused: true });
+		await native.control({ op: "resume", expectedGoalId: state!.goal.id });
+		expect(await harness.session.promptCustomMessage({ customType: "goal-continuation", content: "continue", display: false })).toBe(false);
+		const identity = { goalId: state!.goal.id, continuationGuard: "trusted", sessionId: context!.sessionId, runId: context!.runId };
+		if (invalidation === "later-submission") harness.session.sessionManager.appendCustomEntry("goal-run", { ...identity, runId: "a-different-actual-run" });
+		if (invalidation === "malformed") harness.session.sessionManager.appendCustomEntry("goal-admission-prepared", { ...identity, runId: 42 });
+		if (invalidation === "retired") native.retirePreparedRun(identity.runId);
+		expect(native.getPreparedRunId()).toBeUndefined();
+		await expect(native.control({ op: "complete", expectedGoalId: state!.goal.id })).rejects.toThrow("real matching submitted run");
+	});
+
+	it("late editor rejection during intent flush preserves prepared proof without submitted proof", async () => {
+		const entered = Promise.withResolvers<void>();
+		const release = Promise.withResolvers<void>();
+		let context: GoalGuardContext | undefined;
+		harness.registerGuard("trusted", {
+			beforeRun: async value => { context = value; return { decision: "allow", additionalContext: "Authorized native execution" }; },
+			beforeComplete: async () => ({ decision: "allow" }),
+		});
+		const native = harness.runner.createContext().goal;
+		const state = await native.control({ op: "create", objective: "Fence after intent", continuationGuard: "trusted", paused: true });
+		await native.control({ op: "resume", expectedGoalId: state!.goal.id });
+		const flush = harness.session.sessionManager.flush.bind(harness.session.sessionManager);
+		let delayed = false;
+		vi.spyOn(harness.session.sessionManager, "flush").mockImplementation(async () => {
+			await flush();
+			if (!delayed && harness.session.sessionManager.getBranch().some(entry => entry.type === "custom" && entry.customType === "goal-run-intent")) {
+				delayed = true;
+				entered.resolve();
+				await release.promise;
+			}
+		});
+		const prompt = vi.spyOn(harness.session.agent, "prompt").mockResolvedValue();
+		const pending = harness.session.promptCustomMessage({ customType: "goal-continuation", content: "continue", display: false });
+		await entered.promise;
+		expect(native.getLatestRunId()).toBeUndefined();
+		expect(native.getPreparedRunId()).toBe(context!.runId);
+		harness.mode.editor.setText("operator input");
+		release.resolve();
+		expect(await pending).toBe(false);
+		expect(prompt).not.toHaveBeenCalled();
+		expect(native.getLatestRunId()).toBeUndefined();
+		expect(native.getPreparedRunId()).toBe(context!.runId);
+		await expect(native.control({ op: "complete", expectedGoalId: state!.goal.id })).rejects.toThrow("real matching submitted run");
+		harness.mode.editor.setText("");
+		expect(await harness.session.promptCustomMessage({ customType: "goal-continuation", content: "continue", display: false })).toBe(true);
+		expect(native.getLatestRunId()).toBe(context!.runId);
+		expect(native.getPreparedRunId()).toBeUndefined();
+		expect(prompt).toHaveBeenCalledTimes(1);
+	});
+
+	it("synchronous dispatch persistence preflight fails before publishing submitted proof", async () => {
+		let context: GoalGuardContext | undefined;
+		harness.registerGuard("trusted", {
+			beforeRun: async value => { context = value; return { decision: "allow", additionalContext: "Authorized native execution" }; },
+			beforeComplete: async () => ({ decision: "allow" }),
+		});
+		const native = harness.runner.createContext().goal;
+		const state = await native.control({ op: "create", objective: "Fail before dispatch", continuationGuard: "trusted", paused: true });
+		await native.control({ op: "resume", expectedGoalId: state!.goal.id });
+		const preflight = vi.spyOn(harness.session.sessionManager, "flushSync").mockImplementation(() => { throw new Error("dispatch persistence preflight failed"); });
+		const prompt = vi.spyOn(harness.session.agent, "prompt").mockResolvedValue();
+		await expect(harness.session.promptCustomMessage({ customType: "goal-continuation", content: "continue", display: false })).rejects.toThrow("dispatch persistence preflight failed");
+		preflight.mockRestore();
+		expect(prompt).not.toHaveBeenCalled();
+		expect(native.getLatestRunId()).toBeUndefined();
+		expect(native.getPreparedRunId()).toBe(context!.runId);
+		expect(harness.session.sessionManager.getBranch().filter(entry => entry.type === "custom" && entry.customType === "goal-run")).toHaveLength(0);
+	});
+
+	it("a real session switch cancels in-flight guarded admission and never journals a late allow in the new session", async () => {
+		const entered = Promise.withResolvers<void>();
+		const allow = Promise.withResolvers<GoalRunDecision>();
+		harness.registerGuard("trusted", { beforeRun: async () => { entered.resolve(); return allow.promise; }, beforeComplete: async () => ({ decision: "allow" }) });
+		const native = harness.runner.createContext().goal;
+		const goal = await native.control({ op: "create", objective: "Old session", continuationGuard: "trusted", paused: true });
+		await native.control({ op: "resume", expectedGoalId: goal!.goal.id });
+		const prompt = vi.spyOn(harness.session.agent, "prompt").mockResolvedValue();
+		const pending = harness.session.promptCustomMessage({ customType: "goal-continuation", content: "continue", display: false });
+		await entered.promise;
+		await harness.session.newSession();
+		expect(await pending).toBe(false);
+		allow.resolve({ decision: "allow", additionalContext: "late old authority" });
+		await Promise.resolve();
+		expect(prompt).not.toHaveBeenCalled();
+		expect(native.getState()).toBeUndefined();
+		expect(harness.session.sessionManager.getBranch().filter(entry => entry.type === "custom" && entry.customType === "goal-run")).toHaveLength(0);
 	});
 });

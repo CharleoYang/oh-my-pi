@@ -27,6 +27,8 @@ export {
 import type { type as ArkType } from "@oh-my-pi/omptype";
 import type * as TypeBox from "@oh-my-pi/omptype/typebox";
 import type * as zod from "@oh-my-pi/omptype/zod";
+import type { ExtensionGoalPort, GoalGuard } from "../../goals/state";
+export * from "../../goals/state";
 import type {
 	AgentMessage,
 	AgentToolResult,
@@ -640,6 +642,8 @@ export interface ExtensionContext {
 	ui: ExtensionUIContext;
 	/** Current run mode. Use `"tui"` to guard terminal-only UI such as custom components. */
 	mode: ExtensionMode;
+	/** Native Goal control; snapshots never expose mutable session/runtime objects. */
+	goal: ExtensionGoalPort;
 	/** Get current context usage for the active model. */
 	getContextUsage(): ContextUsage | undefined;
 	/** Get a read-only snapshot of async jobs owned by this session. */
@@ -1586,6 +1590,8 @@ export type ExtensionServiceTier<Family extends ServiceTierFamily> = Family exte
  * Methods retain their extension binding when destructured or passed as callbacks.
  */
 export interface ExtensionAPI {
+	/** Guard ids are unique in this extension generation. */
+	registerGoalGuard(id: string, guard: GoalGuard): void;
 	// =========================================================================
 	// Module Access
 	// =========================================================================
@@ -2159,6 +2165,7 @@ export interface ExtensionCommandContextActions {
 
 /** Full runtime = state + actions, including host-compatible service-tier fallbacks. */
 export interface ExtensionRuntime extends ExtensionRuntimeState, ExtensionActions {
+	goalGuardIds?: Set<string>;
 	getServiceTiers: GetServiceTiersHandler;
 	setServiceTier: SetServiceTierHandler;
 }
@@ -2171,6 +2178,7 @@ export interface Extension {
 	handlers: Map<string, HandlerFn[]>;
 	tools: Map<string, RegisteredTool<any, any>>;
 	toolRegistrationListeners?: Set<ToolRegistrationListener>;
+	goalGuards?: Map<string, GoalGuard>;
 	assistantThinkingRenderers: AssistantThinkingRenderer[];
 	fileWriteFallbackHandlers: FileWriteFallbackHandler[];
 	fileDeleteFallbackHandlers: FileDeleteFallbackHandler[];

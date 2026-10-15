@@ -11,7 +11,7 @@
 import type { Goal } from "@oh-my-pi/pi-tui/tools/goal";
 import { logger } from "@oh-my-pi/pi-utils";
 import { cfgGoalContinuationModes, cfgGoalEnabled } from "../../goals/settings";
-import { type GoalModeState, goalContinuationActivity, goalFromModeData } from "../../goals/state";
+import { type GoalModeState, goalContinuationActivity, goalFromModeData, goalGuardFromModeData } from "../../goals/state";
 import type { AgentSession, AgentSessionEvent } from "../../session/agent-session";
 import { nextActionableTask } from "../../tools/todo";
 
@@ -38,6 +38,7 @@ export type RpcGoalSession = Pick<
 	| "goalRuntime"
 	| "getGoalModeState"
 	| "setGoalModeState"
+	| "setGoalSubmissionAvailability"
 	| "getPlanModeState"
 	| "getEnabledToolNames"
 	| "setActiveToolsByName"
@@ -98,6 +99,9 @@ export class RpcGoalController {
 	constructor(session: RpcGoalSession, onContinuationDropped?: () => void) {
 		this.#session = session;
 		this.#onContinuationDropped = onContinuationDropped;
+		// Scheduled Goal turns re-read RPC policy at native submission, after guard awaits.
+		// Explicit user prompts are outside this continuation-only availability fence.
+		session.setGoalSubmissionAvailability(() => this.#sessionChanges === 0 && this.#continuationWanted());
 	}
 
 	/**
@@ -347,7 +351,7 @@ export class RpcGoalController {
 			this.#session.sessionManager.appendModeChange("none");
 			return;
 		}
-		this.#session.setGoalModeState({ enabled: context.mode === "goal", mode: "active", goal });
+		this.#session.setGoalModeState({ enabled: context.mode === "goal", mode: "active", goal, continuationGuard: goalGuardFromModeData(context.modeData) });
 		const restored = await runtime.onThreadResumed({ preserveActiveGoal: options?.preserveActiveGoal });
 		if (!restored?.goal) return;
 		const previousTools = this.#session.getEnabledToolNames();
@@ -366,6 +370,26 @@ export class RpcGoalController {
 			return;
 		}
 		if (event.type === "goal_updated") {
+			if (event.state?.continuationGuard) {
+				if (event.state.goal.status === "dropped") { this.#queueExit(() => this.#exit()); return; }
+				if (event.state.mode === "exiting" && !this.#session.isStreaming) {
+					this.#journalCompletion();
+					this.#queueExit(() => this.#exit());
+					return;
+				}
+				const goalId = event.state.goal.id;
+				this.#queueExit(async () => {
+					if (this.#session.getGoalModeState()?.goal.id !== goalId) return;
+					if (!event.state?.enabled) { await this.#exit(); return; }
+					if (this.#session.isStreaming) return;
+					const previousTools = this.#previousTools ?? this.#session.getEnabledToolNames();
+					this.#previousTools = previousTools;
+					await this.#session.setActiveToolsByName([...new Set([...previousTools, "goal"])]);
+					this.#resetContinuation();
+					this.#scheduleContinuation();
+				});
+				return;
+			}
 			const status = event.state?.goal.status;
 			if (status === "dropped") {
 				this.#queueExit(() => this.#exit());
@@ -404,7 +428,7 @@ export class RpcGoalController {
 	 */
 	#continuationWanted(): boolean {
 		const session = this.#session;
-		if (!cfgGoalContinuationModes.get(session.settings).includes(RPC_GOAL_CONTINUATION_MODE)) return false;
+		if (!cfgGoalContinuationModes.get(session.settings).includes(RPC_GOAL_CONTINUATION_MODE) && !session.getGoalModeState()?.continuationGuard) return false;
 		if (this.#hostStopped || this.#suppressContinuation || session.isDisposed) return false;
 		if (session.getPlanModeState()?.enabled) return false;
 		const state = session.getGoalModeState();
@@ -451,16 +475,19 @@ export class RpcGoalController {
 				this.#onContinuationDropped?.();
 				return;
 			}
-			this.#pendingContinuationTurns++;
+			let claimed = false;
+			if (!session.getGoalModeState()?.continuationGuard) { claimed = true; this.#pendingContinuationTurns++; }
 			const unclaim = () => {
-				this.#pendingContinuationTurns = Math.max(0, this.#pendingContinuationTurns - 1);
+				if (claimed) this.#pendingContinuationTurns = Math.max(0, this.#pendingContinuationTurns - 1);
 				// No run follows, so nothing else will end this activity stretch.
 				this.#onContinuationDropped?.();
 			};
 			// promptCustomMessage counts the submission as admitted synchronously, so every
 			// settle report sees it from here on. A continuation that is refused or bails
 			// before its run starts must neither stay counted nor withhold settlement.
-			session.promptCustomMessage({ customType: "goal-continuation", content: prompt, display: false }).then(
+			session.promptCustomMessage({ customType: "goal-continuation", content: prompt, display: false }, { onPromptAdmitted: () => {
+				if (!claimed) { claimed = true; this.#pendingContinuationTurns++; }
+			} }).then(
 				dispatched => {
 					if (!dispatched) unclaim();
 				},

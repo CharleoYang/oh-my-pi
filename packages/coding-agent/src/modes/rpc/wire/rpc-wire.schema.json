@@ -2410,6 +2410,9 @@
 		"GoalModeState": {
 			"type": "object",
 			"properties": {
+				"continuationGuard": {
+					"type": "string"
+				},
 				"enabled": {
 					"type": "boolean"
 				},

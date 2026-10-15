@@ -62,6 +62,7 @@ function createHarness(initialStreaming: boolean) {
 		},
 		injectIdle: async messages => {
 			prompts.push(messages);
+			return true;
 		},
 		scheduleIdleFlush: run => {
 			scheduledFlushes.push(run);
@@ -188,5 +189,81 @@ describe("async result yield queue delivery", () => {
 		(message as CommittableAsideMessage)[ASIDE_MESSAGE_DISCARD]?.(new Error("deadline expired"));
 
 		await expect(receipt).rejects.toThrow("deadline expired");
+	});
+
+	test.each(["rejected", "thrown"] as const)("retains original receipts and ordering after %s idle admission", async failure => {
+		const admission = Promise.withResolvers<boolean>();
+		const scheduledFlushes: Array<() => Promise<void>> = [];
+		const attempts: AgentMessage[][] = [];
+		const builtEntries: AsyncEntry[][] = [];
+		const queue = new YieldQueue({
+			isStreaming: () => false,
+			injectIdle: async messages => {
+				attempts.push(messages);
+				if (attempts.length === 1) return admission.promise;
+				const commit = (messages[0] as CommittableAsideMessage)[ASIDE_MESSAGE_COMMIT];
+				commit?.();
+				commit?.();
+				return true;
+			},
+			scheduleIdleFlush: run => scheduledFlushes.push(run),
+		});
+		queue.register<AsyncEntry>("async-result", {
+			build: entries => {
+				builtEntries.push(entries);
+				return buildAsyncMessage(entries);
+			},
+		});
+		const original: AsyncEntry = { jobId: "original", result: "first", job: undefined, durationMs: undefined };
+		const later: AsyncEntry = { jobId: "later", result: "second", job: undefined, durationMs: undefined };
+		let commits = 0;
+		let discards = 0;
+		const firstReceipt = queue.enqueueWithReceipt("async-result", original).then(() => { commits++; }, () => { discards++; });
+		const flush = scheduledFlushes[0]!();
+		const secondReceipt = queue.enqueueWithReceipt("async-result", later).then(() => { commits++; }, () => { discards++; });
+		if (failure === "thrown") admission.reject(new Error("submission failed"));
+		else admission.resolve(false);
+		await flush;
+		expect(queue.has("async-result")).toBe(true);
+		expect(commits).toBe(0);
+		expect(discards).toBe(0);
+		expect(scheduledFlushes).toHaveLength(2);
+		(attempts[0]![0] as CommittableAsideMessage)[ASIDE_MESSAGE_COMMIT]?.();
+		await Promise.resolve();
+		expect(commits).toBe(0);
+		await scheduledFlushes[1]!();
+		await Promise.all([firstReceipt, secondReceipt]);
+		expect(builtEntries[1]![0]).toBe(original);
+		expect(builtEntries[1]![1]).toBe(later);
+		expect(commits).toBe(2);
+		expect(discards).toBe(0);
+		expect(queue.has()).toBe(false);
+		await queue.flush("idle");
+		expect(attempts).toHaveLength(2);
+		expect(commits).toBe(2);
+	});
+
+	test("does not redeliver an idle message already committed before a turn failure", async () => {
+		let attempts = 0;
+		const queue = new YieldQueue({
+			isStreaming: () => false,
+			injectIdle: async messages => {
+				attempts++;
+				(messages[0] as CommittableAsideMessage)[ASIDE_MESSAGE_COMMIT]?.();
+				throw new Error("provider failed after context insertion");
+			},
+			scheduleIdleFlush: () => {},
+		});
+		queue.register<AsyncEntry>("async-result", { build: buildAsyncMessage });
+		let commits = 0;
+		const receipt = queue.enqueueWithReceipt<AsyncEntry>("async-result", {
+			jobId: "committed", result: "done", job: undefined, durationMs: undefined,
+		}).then(() => { commits++; });
+		await queue.flush("idle");
+		await receipt;
+		expect(commits).toBe(1);
+		expect(queue.has()).toBe(false);
+		await queue.flush("idle");
+		expect(attempts).toBe(1);
 	});
 });

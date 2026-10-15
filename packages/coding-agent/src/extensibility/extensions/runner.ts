@@ -32,6 +32,7 @@ import { MAIN_AGENT_RULE_NAME } from "../../capability/rule";
 import type { ModelRegistry } from "../../config/model-registry";
 import { type Settings, withActiveSettings } from "../../config/settings";
 import type { LocalProtocolOptions } from "../../internal-urls/local-protocol";
+import type { ExtensionGoalPort, GoalGuard } from "../../goals/state";
 import type { MemoryRuntimeContext } from "../../memory-backend";
 import { type Theme, theme } from "@oh-my-pi/pi-tui/theme";
 import type { AsyncJobSnapshot, SendUserMessageOptions } from "../../session/agent-session";
@@ -507,6 +508,19 @@ export const UNAVAILABLE_ANNOTATIONS: ExtensionAnnotationsAPI = Object.freeze({
 });
 
 export class ExtensionRunner {
+	#goalPort: ExtensionGoalPort | undefined;
+
+	bindGoalPort(port: ExtensionGoalPort): void {
+		this.#goalPort = port;
+	}
+
+	getGoalGuard(id: string): GoalGuard | undefined {
+		for (const extension of this.extensions) {
+			const guard = extension.goalGuards?.get(id);
+			if (guard) return guard;
+		}
+		return undefined;
+	}
 	#uiContext: ExtensionUIContext;
 	#mode: ExtensionMode = "print";
 	#toolApprovalPreviewWaiter?: (toolCallId: string) => Promise<void>;
@@ -1403,6 +1417,28 @@ export class ExtensionRunner {
 		return {
 			ui: this.#uiContext,
 			mode: this.#mode,
+			goal: {
+				getState: () => {
+					if (!this.#goalPort) throw new Error("Native Goal port is not bound");
+					return this.#goalPort.getState();
+				},
+				getLatestRunId: () => {
+					if (!this.#goalPort) throw new Error("Native Goal port is not bound");
+					return this.#goalPort.getLatestRunId();
+				},
+				getPreparedRunId: () => {
+					if (!this.#goalPort) throw new Error("Native Goal port is not bound");
+					return this.#goalPort.getPreparedRunId();
+				},
+				retirePreparedRun: runId => {
+					if (!this.#goalPort) throw new Error("Native Goal port is not bound");
+					this.#goalPort.retirePreparedRun(runId);
+				},
+				control: request => {
+					if (!this.#goalPort) throw new Error("Native Goal port is not bound");
+					return this.#goalPort.control(request);
+				},
+			},
 			getContextUsage: () => this.#getContextUsageFn(),
 			compact: instructionsOrOptions => this.#compactFn(instructionsOrOptions),
 			getAsyncJobSnapshot: () => this.#getAsyncJobSnapshotFn(),

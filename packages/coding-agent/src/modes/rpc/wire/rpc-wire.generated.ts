@@ -447,6 +447,7 @@ export interface GoalModeState {
 	mode: "active" | "exiting";
 	goal: Goal;
 	reason?: "completed";
+	continuationGuard?: string;
 }
 
 /** Outcome of every `goal` op; both fields are null when the session has no goal. */

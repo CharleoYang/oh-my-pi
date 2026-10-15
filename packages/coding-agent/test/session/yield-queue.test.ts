@@ -33,6 +33,7 @@ function createHarness(initialStreaming: boolean) {
 		},
 		injectIdle: async messages => {
 			idleBatches.push(messages);
+			return true;
 		},
 		scheduleIdleFlush: run => {
 			scheduledFlushes.push(run);
@@ -127,7 +128,7 @@ describe("YieldQueue", () => {
 	});
 
 	test("resolves delivery receipts only after idle injection succeeds", async () => {
-		const injected = Promise.withResolvers<void>();
+		const injected = Promise.withResolvers<boolean>();
 		const scheduledFlushes: Array<() => Promise<void>> = [];
 		const queue = new YieldQueue({
 			isStreaming: () => false,
@@ -145,10 +146,47 @@ describe("YieldQueue", () => {
 		const flush = scheduledFlushes[0]!();
 		await Promise.resolve();
 		expect(delivered).toBe(false);
-		injected.resolve();
+		injected.resolve(true);
 		await flush;
 		await receipt;
 		expect(delivered).toBe(true);
+	});
+
+	test.each(["all", "kind", "unregister"] as const)("%s clearing rejects drained receipts without restoring them after denial", async scope => {
+		const denied = Promise.withResolvers<boolean>();
+		const queue = new YieldQueue({
+			isStreaming: () => false,
+			injectIdle: async () => denied.promise,
+			scheduleIdleFlush: () => {},
+		});
+		const unregister = queue.register<Entry>("items", {
+			build: entries => userMessage(entries.map(entry => entry.id).join(",")),
+		});
+		queue.register<Entry>("other", {
+			build: entries => userMessage(entries.map(entry => entry.id).join(",")),
+		});
+		let outcome = "pending";
+		let otherOutcome = "pending";
+		const receipt = queue.enqueueWithReceipt("items", { id: "cancelled" }).then(
+			() => { outcome = "delivered"; }, () => { outcome = "rejected"; },
+		);
+		const other = queue.enqueueWithReceipt("other", { id: "unrelated" }).then(
+			() => { otherOutcome = "delivered"; }, () => { otherOutcome = "rejected"; },
+		);
+		const flush = queue.flush("idle");
+		if (scope === "unregister") unregister();
+		else if (scope === "kind") queue.clear("items");
+		else queue.clear();
+		await Promise.resolve();
+		expect(outcome).toBe("rejected");
+		expect(otherOutcome).toBe(scope === "all" ? "rejected" : "pending");
+		denied.resolve(false);
+		await flush;
+		await receipt;
+		expect(queue.has("items")).toBe(false);
+		expect(queue.has("other")).toBe(scope !== "all");
+		queue.clear("other");
+		await other;
 	});
 
 	test("resolves an idle receipt when injection commits before the turn finishes", async () => {
@@ -159,6 +197,7 @@ describe("YieldQueue", () => {
 			injectIdle: async messages => {
 				(messages[0] as AgentMessage & { [ASIDE_MESSAGE_COMMIT]?: () => void })[ASIDE_MESSAGE_COMMIT]?.();
 				await finishTurn.promise;
+				return true;
 			},
 			scheduleIdleFlush: run => scheduledFlushes.push(run),
 		});
