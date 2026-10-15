@@ -18,6 +18,7 @@ import { initTheme } from "@oh-my-pi/pi-tui/theme";
 import type { SubmittedUserInput } from "@oh-my-pi/pi-coding-agent/modes/types";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
+import { IrcBridge } from "@oh-my-pi/pi-coding-agent/session/irc-bridge";
 import { convertToLlm, normalizeCustomMessagePayload } from "@oh-my-pi/pi-coding-agent/session/messages";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { FileSessionStorage, type SessionStorage } from "@oh-my-pi/pi-coding-agent/session/session-storage";
@@ -197,6 +198,14 @@ function recordProviderRequests(session: AgentSession): string[] {
 		return stream;
 	};
 	return requests;
+}
+
+async function settleIrcWake(session: AgentSession): Promise<void> {
+	for (let attempt = 0; session.isStreaming && attempt < 1_000; attempt++) {
+		await new Promise<void>(resolve => setImmediate(resolve));
+	}
+	expect(session.isStreaming).toBe(false);
+	await session.waitForIdle();
 }
 
 
@@ -1033,6 +1042,111 @@ describe("InteractiveMode goal mode integration", () => {
 		} finally {
 			await restoredSession.dispose();
 		}
+	});
+
+	it.each(["guard", "intent"] as const)("guarded IRC wake defers pooled ownership acquired during %s admission", async timing => {
+		const entered = Promise.withResolvers<void>();
+		const allow = Promise.withResolvers<GoalRunDecision>();
+		const releaseIntent = Promise.withResolvers<void>();
+		const manager = harness.session.sessionManager;
+		const flush = manager.flush.bind(manager);
+		let heldIntent = false;
+		vi.spyOn(manager, "flush").mockImplementation(async () => {
+			await flush();
+			const latest = manager.getBranch().at(-1);
+			if (timing === "intent" && !heldIntent && latest?.type === "custom" && latest.customType === "goal-run-intent") {
+				heldIntent = true;
+				entered.resolve();
+				await releaseIntent.promise;
+			}
+		});
+		harness.registerGuard("trusted", {
+			beforeRun: async () => {
+				if (timing === "intent") return { decision: "allow", additionalContext: "Authorized IRC delivery" };
+				entered.resolve();
+				return allow.promise;
+			},
+			beforeComplete: async () => ({ decision: "allow" }),
+		});
+		const native = harness.runner.createContext().goal;
+		const state = await native.control({ op: "create", objective: "Preserve IRC ownership", continuationGuard: "trusted", paused: true });
+		await native.control({ op: "resume", expectedGoalId: state!.goal.id });
+		const requests: string[] = [];
+		vi.spyOn(harness.session.agent, "prompt").mockImplementation(async messages => { requests.push(JSON.stringify(messages)); });
+		let observations = 0;
+		harness.session.setIrcWakeTurnObserver(() => { observations++; return undefined; });
+		await harness.session.deliverIrcMessage({ id: "guarded-pool-race", from: "Peer", to: "Main", body: "Deferred guarded IRC wake", ts: Date.now() });
+		await entered.promise;
+		await harness.session.setWorkPoolYieldItems([{ id: "pool#1", index: 1 }]);
+		allow.resolve({ decision: "allow", additionalContext: "Authorized IRC delivery" });
+		releaseIntent.resolve();
+		await settleIrcWake(harness.session);
+		expect(requests).toHaveLength(0);
+		expect(observations).toBe(0);
+		expect(harness.session.sessionManager.getBranch().filter(entry => entry.type === "custom" && entry.customType === "goal-run")).toHaveLength(0);
+		await harness.session.setWorkPoolYieldItems([]);
+		await settleIrcWake(harness.session);
+		expect(requests).toHaveLength(1);
+		expect(requests[0]).toContain("Deferred guarded IRC wake");
+		expect(observations).toBe(1);
+	});
+
+	it("guarded IRC wake joins a replacement empty contract's pending prompt rebuild", async () => {
+		const entered = Promise.withResolvers<void>();
+		const allow = Promise.withResolvers<GoalRunDecision>();
+		harness.registerGuard("trusted", {
+			beforeRun: async () => { entered.resolve(); return allow.promise; },
+			beforeComplete: async () => ({ decision: "allow" }),
+		});
+		const native = harness.runner.createContext().goal;
+		const state = await native.control({ op: "create", objective: "Await replacement prompt", continuationGuard: "trusted", paused: true });
+		await native.control({ op: "resume", expectedGoalId: state!.goal.id });
+		const prompt = vi.spyOn(harness.session.agent, "prompt").mockResolvedValue();
+		await harness.session.deliverIrcMessage({ id: "guarded-rebuild-race", from: "Peer", to: "Main", body: "Wake after the prompt rebuild", ts: Date.now() });
+		await entered.promise;
+		await harness.session.setWorkPoolYieldItems([{ id: "pool#1", index: 1 }]);
+		const rebuilt = Promise.withResolvers<void>();
+		vi.spyOn(harness.session, "refreshBaseSystemPrompt").mockImplementationOnce(() => rebuilt.promise);
+		const clearing = harness.session.setWorkPoolYieldItems([]);
+		const deferred = Promise.withResolvers<void>();
+		const queueAside = IrcBridge.prototype.queueAside;
+		vi.spyOn(IrcBridge.prototype, "queueAside").mockImplementation(function (this: IrcBridge, records) {
+			queueAside.call(this, records);
+			deferred.resolve();
+		});
+		allow.resolve({ decision: "allow", additionalContext: "Authorized IRC delivery" });
+		await deferred.promise;
+		expect(harness.session.getWorkPoolYieldItems()).toHaveLength(0);
+		expect(prompt).not.toHaveBeenCalled();
+		rebuilt.resolve();
+		await clearing;
+		await settleIrcWake(harness.session);
+		expect(prompt).toHaveBeenCalledTimes(1);
+		expect(JSON.stringify(prompt.mock.calls[0]?.[0])).toContain("Wake after the prompt rebuild");
+	});
+
+	it("guarded IRC wake survives rejected admission and resumes without a new message", async () => {
+		let guardCalls = 0;
+		harness.registerGuard("trusted", {
+			beforeRun: async () => ++guardCalls === 1 ? { decision: "block", reason: "temporarily unavailable" } : { decision: "allow", additionalContext: "Authorized IRC delivery" },
+			beforeComplete: async () => ({ decision: "allow" }),
+		});
+		const native = harness.runner.createContext().goal;
+		const state = await native.control({ op: "create", objective: "Preserve rejected IRC", continuationGuard: "trusted", paused: true });
+		await native.control({ op: "resume", expectedGoalId: state!.goal.id });
+		const requests = recordProviderRequests(harness.session);
+		const finished = Promise.withResolvers<void>();
+		harness.session.setIrcWakeTurnObserver(() => () => finished.resolve());
+		await harness.session.deliverIrcMessage({ id: "guarded-rejected-wake", from: "Peer", to: "Main", body: "Retained rejected IRC wake", ts: Date.now() });
+		await settleIrcWake(harness.session);
+		expect(requests).toHaveLength(0);
+		expect(native.getState()?.goal.status).toBe("paused");
+		await native.control({ op: "resume", expectedGoalId: state!.goal.id });
+		await finished.promise;
+		await harness.session.waitForIdle();
+		expect(requests).toHaveLength(1);
+		expect(requests[0]).toContain("Retained rejected IRC wake");
+		expect(guardCalls).toBe(2);
 	});
 
 	it.each(["before-guard", "during-guard"] as const)("autonomous Goal submission stays fenced by unrelated input queued %s", async timing => {

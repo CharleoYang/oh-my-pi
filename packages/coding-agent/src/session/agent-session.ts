@@ -1262,6 +1262,9 @@ export class AgentSession implements SettingsScope {
 		if (this.#modeExitDrainSuppressionDepth > 0 || this.#isDisposed || this.isStreaming || !this.#irc.hasPending()) {
 			return;
 		}
+		const goal = this.#goalModeState;
+		// Rejected guarded wakes remain queued until explicit resume, not a busy retry loop.
+		if (goal?.continuationGuard && (!goal.enabled || goal.goal.status !== "active")) return;
 		// A pooled yield contract means a pool turn owns this worker (installed,
 		// dispatching, or dispatch-imminent). Waking here would either emit keyed
 		// yields against its items or re-queue into the deferral path forever, so
@@ -1376,12 +1379,10 @@ export class AgentSession implements SettingsScope {
 		// in flight when the wake lands. Starting the turn on the stale prompt would
 		// advertise one yield schema while the runtime enforces the other, so join
 		// the transition before building the turn from a consistent contract.
-		void this.whenWorkPoolYieldSettled()
-			.then(() => {
-				// Synchronous ownership check, atomic with the dispatch below:
-				// agent.prompt() claims streaming with no await in between, and the
-				// yield contract above mutates synchronously, so no install can
-				// interleave here.
+		// Admission must still own this exact settled contract after every guard await.
+		const yieldTransition = this.#workPoolYieldTransition;
+		void yieldTransition
+			.then(async () => {
 				if (this.#workPoolYieldItems.length > 0) {
 					// A pooled turn owns this worker (installed, running, or
 					// dispatch-imminent): park wake-intended records where pooled
@@ -1397,8 +1398,13 @@ export class AgentSession implements SettingsScope {
 					logger.debug("IRC wake turn deferred behind the running turn");
 					return;
 				}
-				observation = this.#startTurnObservation(records);
-				return this.#submitGoalPrompt(records);
+				const submitted = await this.#submitGoalPrompt(records, undefined, () => {
+					observation = this.#startTurnObservation(records);
+				}, () => this.#workPoolYieldItems.length === 0 && this.#workPoolYieldTransition === yieldTransition);
+				if (!submitted) {
+					if (this.#workPoolYieldItems.length > 0) this.#irc.queueDeferredWake(records);
+					else this.#irc.queueAside(records);
+				}
 			})
 			.catch(error => {
 				if (error instanceof AgentBusyError) {
@@ -2199,7 +2205,9 @@ export class AgentSession implements SettingsScope {
 			getCurrentUsage: () => this.#goalUsage(),
 			emit: event => {
 				if (event.type === "goal_updated") {
-					return this.#emitSessionEvent({ type: "goal_updated", goal: event.goal, state: event.state });
+					const emitted = this.#emitSessionEvent({ type: "goal_updated", goal: event.goal, state: event.state });
+					if (event.state?.continuationGuard && event.state.enabled) this.#resumeStrandedIrcAsides();
+					return emitted;
 				}
 			},
 			beforeComplete: () => this.#goalAdmission.beforeComplete(),
@@ -6874,14 +6882,14 @@ export class AgentSession implements SettingsScope {
 		this.#goalSubmissionAvailable = check;
 	}
 
-	async #submitGoalPrompt(messages: AgentMessage | AgentMessage[], options?: { toolChoice?: ToolChoice }, onSubmitted?: () => void): Promise<boolean> {
+	async #submitGoalPrompt(messages: AgentMessage | AgentMessage[], options?: { toolChoice?: ToolChoice }, onSubmitted?: () => void, available: () => boolean = () => true): Promise<boolean> {
 		const continuation = Array.isArray(messages) ? messages.some(message => message.role === "custom" && message.customType === "goal-continuation") : messages.role === "custom" && messages.customType === "goal-continuation";
 		return this.#goalAdmission.submit(async additionalContext => {
 			let records = messages;
 			if (additionalContext) records = [...(Array.isArray(messages) ? messages : [messages]), { role: "custom", customType: "goal-guard-context", content: additionalContext, display: false, timestamp: Date.now() }];
 			onSubmitted?.();
 			await this.agent.prompt(records, options);
-		}, () => this.queuedMessageCount === 0 && (!continuation || (this.#goalSubmissionAvailable?.() ?? true)));
+		}, () => available() && this.queuedMessageCount === 0 && (!continuation || (this.#goalSubmissionAvailable?.() ?? true)));
 	}
 
 	getVibeModeState(): VibeModeState | undefined {
