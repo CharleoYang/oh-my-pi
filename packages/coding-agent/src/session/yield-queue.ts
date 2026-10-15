@@ -32,12 +32,15 @@ interface StoredEntry {
 	reject?: (error: Error) => void;
 }
 
-interface BuiltMessage {
+interface PendingDelivery {
 	kind: string;
 	dispatcher: StoredDispatcher;
 	settled: boolean;
-	message: AgentMessage;
 	entries: StoredEntry[];
+}
+
+interface BuiltMessage extends PendingDelivery {
+	message: AgentMessage;
 }
 
 function formatError(error: unknown): string {
@@ -48,7 +51,7 @@ export class YieldQueue {
 	readonly #options: YieldQueueOptions;
 	readonly #dispatchers = new Map<string, StoredDispatcher>();
 	readonly #entries = new Map<string, StoredEntry[]>();
-	readonly #pendingMessages = new Set<BuiltMessage>();
+	readonly #pendingMessages = new Set<PendingDelivery>();
 	#idleFlushPending = false;
 
 	constructor(options: YieldQueueOptions) {
@@ -208,8 +211,15 @@ export class YieldQueue {
 		for (const [kind, dispatcher] of this.#dispatchers) {
 			const entries = this.#drain(kind);
 			if (entries.length === 0) continue;
+			const pending: PendingDelivery = { kind, dispatcher, settled: false, entries };
+			// Clearing must see the drained receipts even before the consumer invokes its thunk.
+			this.#pendingMessages.add(pending);
 			thunks.push(() => {
+				if (pending.settled) return null;
 				const built = this.#build(kind, dispatcher, entries);
+				this.#pendingMessages.delete(pending);
+				if (pending.settled) return null;
+				pending.settled = true;
 				if (!built) return null;
 				this.#attachEntrySettlement(built);
 				return built.message;
