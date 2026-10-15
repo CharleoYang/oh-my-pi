@@ -1,5 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import { type AgentMessage, ASIDE_MESSAGE_COMMIT } from "@oh-my-pi/pi-agent-core";
+import {
+	type AgentMessage,
+	ASIDE_MESSAGE_COMMIT,
+	ASIDE_MESSAGE_DISCARD,
+	type CommittableAsideMessage,
+} from "@oh-my-pi/pi-agent-core";
 import { YieldQueue } from "@oh-my-pi/pi-coding-agent/session/yield-queue";
 
 type Entry = {
@@ -152,11 +157,19 @@ describe("YieldQueue", () => {
 		expect(delivered).toBe(true);
 	});
 
-	test.each(["all", "kind", "unregister"] as const)("%s clearing rejects drained receipts without restoring them after denial", async scope => {
-		const denied = Promise.withResolvers<boolean>();
+	test.each(
+		(["all", "kind", "unregister"] as const).flatMap(scope =>
+			(["denied", "allowed", "thrown"] as const).map(admission => ({ scope, admission })),
+		),
+	)("$scope clearing rejects drained receipts without restoring them after $admission admission", async ({ scope, admission }) => {
+		const held = Promise.withResolvers<boolean>();
+		const attempts: AgentMessage[][] = [];
 		const queue = new YieldQueue({
 			isStreaming: () => false,
-			injectIdle: async () => denied.promise,
+			injectIdle: messages => {
+				attempts.push(messages);
+				return held.promise;
+			},
 			scheduleIdleFlush: () => {},
 		});
 		const unregister = queue.register<Entry>("items", {
@@ -174,19 +187,83 @@ describe("YieldQueue", () => {
 			() => { otherOutcome = "delivered"; }, () => { otherOutcome = "rejected"; },
 		);
 		const flush = queue.flush("idle");
+		expect(attempts).toHaveLength(1);
+		expect(queue.has()).toBe(false);
 		if (scope === "unregister") unregister();
 		else if (scope === "kind") queue.clear("items");
 		else queue.clear();
 		await Promise.resolve();
 		expect(outcome).toBe("rejected");
 		expect(otherOutcome).toBe(scope === "all" ? "rejected" : "pending");
-		denied.resolve(false);
+		if (admission === "thrown") held.reject(new Error("admission failed"));
+		else held.resolve(admission === "allowed");
 		await flush;
 		await receipt;
+		for (const message of attempts[0]!) {
+			(message as CommittableAsideMessage)[ASIDE_MESSAGE_COMMIT]?.();
+			(message as CommittableAsideMessage)[ASIDE_MESSAGE_DISCARD]?.(new Error("late discard"));
+		}
+		await Promise.resolve();
+		expect(outcome).toBe("rejected");
+		expect(otherOutcome).toBe(scope === "all" ? "rejected" : admission === "allowed" ? "delivered" : "pending");
 		expect(queue.has("items")).toBe(false);
-		expect(queue.has("other")).toBe(scope !== "all");
+		expect(queue.has("other")).toBe(scope !== "all" && admission !== "allowed");
 		queue.clear("other");
 		await other;
+	});
+
+	test.each(
+		(["all", "kind", "unregister"] as const).flatMap(scope =>
+			(["before build", "after build"] as const).map(timing => ({ scope, timing })),
+		),
+	)("$scope clearing fences lazy receipts $timing", async ({ scope, timing }) => {
+		const harness = createHarness(true);
+		const builtIds: string[] = [];
+		const unregister = harness.queue.register<Entry>("items", {
+			build: entries => {
+				builtIds.push(...entries.map(entry => entry.id));
+				return userMessage(entries.map(entry => entry.id).join(","));
+			},
+		});
+		harness.queue.register<Entry>("other", {
+			build: entries => userMessage(entries.map(entry => entry.id).join(",")),
+		});
+		let outcome = "pending";
+		let otherOutcome = "pending";
+		const receipt = harness.queue.enqueueWithReceipt("items", { id: "cancelled" }).then(
+			() => { outcome = "delivered"; }, () => { outcome = "rejected"; },
+		);
+		const other = harness.queue.enqueueWithReceipt("other", { id: "unrelated" }).then(
+			() => { otherOutcome = "delivered"; }, () => { otherOutcome = "rejected"; },
+		);
+		const thunks = harness.queue.drainLazy();
+		expect(thunks).toHaveLength(2);
+		expect(harness.queue.has()).toBe(false);
+		const message = timing === "after build" ? thunks[0]!() : null;
+		if (timing === "after build") expect(message).not.toBeNull();
+		if (scope === "unregister") unregister();
+		else if (scope === "kind") harness.queue.clear("items");
+		else harness.queue.clear();
+		await Promise.resolve();
+		expect(outcome).toBe("rejected");
+		expect(otherOutcome).toBe(scope === "all" ? "rejected" : "pending");
+		if (message) {
+			(message as CommittableAsideMessage)[ASIDE_MESSAGE_COMMIT]?.();
+			(message as CommittableAsideMessage)[ASIDE_MESSAGE_DISCARD]?.(new Error("late discard"));
+		} else {
+			expect(thunks[0]!()).toBeNull();
+			expect(builtIds).toEqual([]);
+		}
+		const otherMessage = thunks[1]!();
+		if (scope === "all") expect(otherMessage).toBeNull();
+		else {
+			expect(otherMessage).not.toBeNull();
+			(otherMessage as CommittableAsideMessage)[ASIDE_MESSAGE_COMMIT]?.();
+		}
+		await Promise.all([receipt, other]);
+		expect(outcome).toBe("rejected");
+		expect(otherOutcome).toBe(scope === "all" ? "rejected" : "delivered");
+		expect(harness.queue.has()).toBe(false);
 	});
 
 	test("resolves an idle receipt when injection commits before the turn finishes", async () => {
