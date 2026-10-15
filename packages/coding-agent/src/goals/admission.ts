@@ -17,12 +17,25 @@ export interface GoalAdmissionHost {
 	getLatestRunId?(goalId: string, guardId: string): string | undefined;
 }
 
+export type GoalCompletionRefusalState = "missing" | "prepared" | "intent" | "cancelled-intent" | "stale";
+
+/** A refused completion is not proof that an unsubmitted candidate ran. */
+export class GoalCompletionRefusedError extends Error {
+	readonly code = "GOAL_COMPLETION_REQUIRES_SUBMITTED_RUN";
+
+	constructor(readonly state: GoalCompletionRefusalState, readonly runId?: string) {
+		super(`Guarded Goal completion requires a real matching submitted run (state: ${state})`);
+		this.name = "GoalCompletionRefusedError";
+	}
+}
+
 /** Native reservation and final submission seam shared by every host surface. */
 export class GoalAdmission {
 	readonly #host: GoalAdmissionHost;
 	readonly #callback = new AsyncLocalStorage<boolean>();
 	#reservation: AbortController | undefined;
 	#lastRun: { context: GoalGuardContext; guard: GoalGuard; generation: number; controller: AbortController } | undefined;
+	#intent: GoalGuardContext | undefined;
 
 	constructor(host: GoalAdmissionHost) { this.#host = host; }
 
@@ -67,6 +80,7 @@ export class GoalAdmission {
 		if (this.#reservation || !state.enabled || state.goal.status !== "active") return false;
 		const controller = new AbortController();
 		this.#reservation = controller;
+		this.#intent = undefined;
 		const generation = this.#host.getGeneration();
 		const sessionId = this.#host.getSessionId();
 		const guard = this.#host.getGuard(state.continuationGuard);
@@ -105,10 +119,12 @@ export class GoalAdmission {
 					}
 					const submittedContext = decision.resumeRunId ? Object.freeze({ ...context, runId: decision.resumeRunId }) : context;
 					// Durable intent is not submitted proof; fences may still close during its write.
+					this.#intent = submittedContext;
 					await this.#host.recordRunIntent(submittedContext);
 					if (!current()) return false;
 					// Publish proof only at dispatch, without an await after the final fence.
 					this.#host.recordRun(submittedContext);
+					this.#intent = undefined;
 					this.#lastRun = { context: submittedContext, guard, generation, controller };
 					await run(decision.additionalContext);
 					return true;
@@ -146,7 +162,15 @@ export class GoalAdmission {
 		const current = () => run && run.context.goal.goal.id === this.#host.getState()?.goal.id &&
 			run.context.sessionId === this.#host.getSessionId() && run.generation === this.#host.getGeneration() &&
 			this.#host.getGuard(state.continuationGuard!) === run.guard && !run.context.signal.aborted;
-		if (!current() || !run) throw new Error("Guarded Goal completion requires a real matching submitted run");
+		if (!current() || !run) {
+			const intent = this.#intent;
+			const matchingIntent = intent?.goal.goal.id === state.goal.id && intent.sessionId === this.#host.getSessionId();
+			const preparedRunId = this.getPreparedRunId();
+			const refusalState: GoalCompletionRefusalState = matchingIntent
+				? intent.signal.aborted ? "cancelled-intent" : "intent"
+				: run ? "stale" : preparedRunId ? "prepared" : "missing";
+			throw new GoalCompletionRefusedError(refusalState, matchingIntent ? intent.runId : run?.context.runId ?? preparedRunId);
+		}
 		const context = Object.freeze({ ...run.context, goal: goalSnapshot(state)! });
 		const result = await this.#cancellable(this.#callback.run(true, () => run.guard.beforeComplete(context)), context.signal);
 		if (!current() || !result) throw new Error("Goal completion admission became stale");
