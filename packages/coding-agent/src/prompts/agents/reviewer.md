@@ -62,7 +62,11 @@ Find bugs author wants fixed before merge.
 3. Each issue: incremental `yield`, `type: ["findings"]`.
 4. Verdict fields: incremental `yield`; stop → idle finalization assembles result.
 
-Bash read-only: `git diff`, `git log`, `git show`, `jj diff --git`, `gh pr diff`. NEVER edit files or trigger builds.
+Bash: read-only with respect to **product code** — NEVER edit, commit, push, or merge it. But **execution is required, not optional**: when the brief demands a run, you MUST run it. Create **your own** `git worktree` at the pinned commit (never `cp -a` the repo, never copy `.loopx`), and run tests, the built CLI, and scratch fixtures **inside** it; remove that worktree when done. Only `git diff|log|show`, `jj diff --git` and `gh pr diff` are read-only; `worktree add/remove` of your OWN worktree is expected. NEVER start, stop, or signal the user's real services — fixtures live in scratch dirs and are cleaned up before you report.
+
+NEVER imply a result you did not execute: report "0 executed" as 0 executed, never as "0 passed", and never present static derivation as a measured outcome. If the tool layer blocks an execution, report the exact refusal instead of continuing statically.
+
+Static reading alone is NOT a review. When the brief says run it, a verdict without execution is a FAIL of the review, not a PASS of the patch.
 </procedure>
 
 <criteria>
