@@ -15,10 +15,17 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { AuthStorage, SqliteAuthCredentialStore } from "@oh-my-pi/pi-ai";
+import { OAUTH_DEFINITIVE_REFRESH_RETRIES } from "@oh-my-pi/pi-ai/auth/refresh";
 import { MCPManager } from "@oh-my-pi/pi-coding-agent/mcp/manager";
 import * as oauthFlow from "@oh-my-pi/pi-coding-agent/mcp/oauth-flow";
 import type { MCPServerConfig } from "@oh-my-pi/pi-coding-agent/mcp/types";
 import { removeWithRetries } from "@oh-my-pi/pi-utils";
+
+// A definitive `invalid_grant` is retried a bounded number of times before the
+// credential is cleared; 1ms keeps that cadence from slowing the suite down.
+process.env.OAUTH_DEFINITIVE_REFRESH_RETRY_DELAY_MS = "1";
+/** One initial attempt plus the bounded definitive-failure retries. */
+const DEFINITIVE_REFRESH_ATTEMPTS = 1 + OAUTH_DEFINITIVE_REFRESH_RETRIES;
 
 const CREDENTIAL_ID = "mcp_oauth_test_1908";
 const TOKEN_URL = "https://example.com/oauth/token";
@@ -163,7 +170,7 @@ describe("MCPManager OAuth refresh failure", () => {
 
 		const prepared = await manager.prepareConfig(serverConfig);
 
-		expect(refreshSpy).toHaveBeenCalledTimes(1);
+		expect(refreshSpy).toHaveBeenCalledTimes(DEFINITIVE_REFRESH_ATTEMPTS);
 		expect(refreshSpy).toHaveBeenCalledWith(
 			TOKEN_URL,
 			STALE_REFRESH,
@@ -504,8 +511,8 @@ describe("MCPManager shared SQLite OAuth refresh", () => {
 
 				const resolved = await prepared;
 
-				expect(refreshRequests).toBe(1);
-				expect(refreshTokens).toEqual([SHARED_STALE_REFRESH]);
+				expect(refreshRequests).toBe(DEFINITIVE_REFRESH_ATTEMPTS);
+				expect(refreshTokens).toEqual(Array(DEFINITIVE_REFRESH_ATTEMPTS).fill(SHARED_STALE_REFRESH));
 				expect(getAuthorizationHeader(resolved)).toBe(`Bearer ${SHARED_FRESH_ACCESS}`);
 
 				await authA.credentials.reload();

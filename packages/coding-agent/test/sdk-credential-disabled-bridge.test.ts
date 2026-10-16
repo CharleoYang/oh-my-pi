@@ -15,6 +15,11 @@ import { CREDENTIAL_DISABLED_NOTICE_SOURCE } from "@oh-my-pi/pi-coding-agent/ses
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { removeSyncWithRetries, Snowflake } from "@oh-my-pi/pi-utils";
 
+// A definitive refresh failure is retried a bounded number of times before the
+// credential is disabled, so keep the backoff at 1ms: the default 1s linear
+// schedule would push the mocked-refresh failures past the per-test timeout.
+process.env.OAUTH_DEFINITIVE_REFRESH_RETRY_DELAY_MS = "1";
+
 interface SessionDirs {
 	cwd: string;
 	agentDir: string;
