@@ -14,6 +14,7 @@ import {
 } from "@oh-my-pi/pi-catalog/wire/codex";
 import {
 	$env,
+	$envpos,
 	$flag,
 	asRecord,
 	cloneJsonTree,
@@ -314,8 +315,20 @@ const CODEX_ADDITIONAL_PROGRESS_EVENT_TYPES = new Set(["response.done", "respons
 // whitespace-only function-call argument deltas forever. Those frames count as
 // transport activity, so idle timers never fire; cap the run before raw debug
 // buffers and partial JSON grow without semantic progress.
-const CODEX_WHITESPACE_TOOL_CALL_ARGUMENT_DELTA_EVENT_LIMIT = 256;
-const CODEX_WHITESPACE_TOOL_CALL_ARGUMENT_DELTA_CHAR_LIMIT = 16 * 1024;
+//
+// Some gateways emit those short deltas as keep-alive while a long tool-call
+// argument is still being assembled, and a legitimate run then trips the cap.
+// `PI_CODEX_WHITESPACE_DELTA_EVENT_LIMIT` / `PI_CODEX_WHITESPACE_DELTA_CHAR_LIMIT`
+// raise either cap for those deployments. The official defaults are unchanged,
+// and an empty, unparsable, zero or negative value keeps them.
+const CODEX_WHITESPACE_TOOL_CALL_ARGUMENT_DELTA_EVENT_LIMIT = $envpos(
+	"PI_CODEX_WHITESPACE_DELTA_EVENT_LIMIT",
+	256,
+);
+const CODEX_WHITESPACE_TOOL_CALL_ARGUMENT_DELTA_CHAR_LIMIT = $envpos(
+	"PI_CODEX_WHITESPACE_DELTA_CHAR_LIMIT",
+	16 * 1024,
+);
 const CODEX_WHITESPACE_LOOP_RETRY_LIMIT = 2;
 const CODEX_WHITESPACE_LOOP_RETRY_DELAY_MS = 250;
 
