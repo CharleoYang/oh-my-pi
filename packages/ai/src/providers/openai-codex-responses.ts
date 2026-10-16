@@ -4910,9 +4910,15 @@ function createCodexHeaders(
 	headers.delete(OPENAI_HEADERS.BETA);
 	headers.delete("openai-beta");
 	headers.set(OPENAI_HEADERS.BETA, betaHeader);
-	headers.set(OPENAI_HEADERS.ORIGINATOR, OPENAI_HEADER_VALUES.ORIGINATOR_CODEX);
+	// OMP's own registered identity is the default, but an explicit caller value
+	// wins: a gateway that allowlists its own client attribution is configured
+	// deliberately (provider `headers` in the model config), and the transport
+	// must not silently turn itself into an official Codex client either way.
+	if (!headers.has(OPENAI_HEADERS.ORIGINATOR)) {
+		headers.set(OPENAI_HEADERS.ORIGINATOR, OPENAI_HEADER_VALUES.ORIGINATOR_CODEX);
+	}
 	headers.set(OPENAI_HEADERS.VERSION, codexClientVersion);
-	headers.set("User-Agent", USER_AGENT);
+	if (!headers.has("User-Agent")) headers.set("User-Agent", USER_AGENT);
 	if (sessionId) {
 		// The backend derives prompt-cache affinity from the session headers
 		// (codex-rs `responses_session_id`); a side request shares its parent's.
@@ -4991,6 +4997,11 @@ export function resolveCodexResponsesUrl(baseUrl: string | undefined): string {
 	const raw = baseUrl && baseUrl.trim().length > 0 ? baseUrl : CODEX_BASE_URL;
 	const normalized = raw.replace(/\/+$/, "");
 	if (normalized.endsWith("/codex/responses")) return normalized;
+	// A provider already targeting the plain Responses endpoint (a gateway wired
+	// like Codex's own `wire_api = "responses"`) keeps its exact path. Only the
+	// official ChatGPT backend and `/codex`-suffixed hosts get the
+	// `/codex/responses` mapping.
+	if (normalized.endsWith("/responses")) return normalized;
 	if (normalized.endsWith("/codex")) return `${normalized}/responses`;
 	return `${normalized}/codex/responses`;
 }

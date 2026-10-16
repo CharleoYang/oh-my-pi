@@ -424,6 +424,7 @@ describe("openai-codex streaming", () => {
 			"https://chatgpt.com/backend-api",
 			"https://chatgpt.com/backend-api/codex",
 			"https://chatgpt.com/backend-api/codex/responses",
+			"https://gateway.example/responses",
 		]) {
 			const model = { ...createCodexTestModel(baseUrl), preferWebsockets: false };
 			const result = await streamOpenAICodexResponses(model, context, {
@@ -438,7 +439,51 @@ describe("openai-codex streaming", () => {
 			"https://chatgpt.com/backend-api/codex/responses",
 			"https://chatgpt.com/backend-api/codex/responses",
 			"https://chatgpt.com/backend-api/codex/responses",
+			"https://gateway.example/responses",
 		]);
+	});
+
+	it("preserves an explicit User-Agent for an authorized Codex gateway", async () => {
+		let requestHeaders: Headers | undefined;
+		const fetchMock: FetchImpl = async (_input, init) => {
+			requestHeaders = init?.headers instanceof Headers ? init.headers : new Headers(init?.headers);
+			return new Response(createCompletedCodexSse("Hello"), {
+				status: 200,
+				headers: { "content-type": "text/event-stream" },
+			});
+		};
+
+		const result = await streamOpenAICodexResponses(
+			{ ...createCodexTestModel("https://gateway.example/responses"), preferWebsockets: false },
+			createCodexTestContext(),
+			{ apiKey: "gateway-key", headers: { "User-Agent": "authorized-gateway/1.0" }, fetch: fetchMock },
+		).result();
+
+		expect(result.stopReason).toBe("stop");
+		expect(requestHeaders?.get("User-Agent")).toBe("authorized-gateway/1.0");
+		// Everything the caller did not override keeps OMP's own identity.
+		expect(requestHeaders?.get("originator")).toBe("omp");
+	});
+
+	it("preserves an explicit originator for an authorized Codex gateway", async () => {
+		let requestHeaders: Headers | undefined;
+		const fetchMock: FetchImpl = async (_input, init) => {
+			requestHeaders = init?.headers instanceof Headers ? init.headers : new Headers(init?.headers);
+			return new Response(createCompletedCodexSse("Hello"), {
+				status: 200,
+				headers: { "content-type": "text/event-stream" },
+			});
+		};
+
+		const result = await streamOpenAICodexResponses(
+			{ ...createCodexTestModel("https://gateway.example/responses"), preferWebsockets: false },
+			createCodexTestContext(),
+			{ apiKey: "gateway-key", headers: { originator: "authorized-gateway" }, fetch: fetchMock },
+		).result();
+
+		expect(result.stopReason).toBe("stop");
+		expect(requestHeaders?.get("originator")).toBe("authorized-gateway");
+		expect(requestHeaders?.get("User-Agent")).toMatch(/^omp\//u);
 	});
 
 	it("omits chatgpt account headers for opaque custom provider API keys", async () => {
