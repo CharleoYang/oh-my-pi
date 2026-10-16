@@ -9,9 +9,15 @@ import {
 	SqliteAuthCredentialStore,
 	type StoredAuthCredential,
 } from "@oh-my-pi/pi-ai/auth-storage";
+import { OAUTH_DEFINITIVE_REFRESH_RETRIES } from "@oh-my-pi/pi-ai/auth/refresh";
 import * as oauthUtils from "@oh-my-pi/pi-ai/registry/oauth";
 import { removeWithRetries } from "../../utils/src/temp";
 import { withEnv } from "./helpers";
+
+/** One initial attempt plus the bounded definitive-failure retries. */
+const DEFINITIVE_REFRESH_ATTEMPTS = 1 + OAUTH_DEFINITIVE_REFRESH_RETRIES;
+/** Keeps the retry cadence out of the mocked-refresh timeouts. */
+const DEFINITIVE_REFRESH_RETRY_DELAY_ENV = "OAUTH_DEFINITIVE_REFRESH_RETRY_DELAY_MS";
 
 const SUPPRESS_ANTHROPIC_ENV = {
 	ANTHROPIC_API_KEY: undefined,
@@ -25,6 +31,9 @@ describe("AuthStorage OAuth refresh race", () => {
 	let events: CredentialDisabledEvent[] = [];
 
 	beforeEach(async () => {
+		// A definitive `invalid_grant` is retried a bounded number of times before
+		// the credential is disabled; 1ms keeps that cadence fast under test.
+		process.env[DEFINITIVE_REFRESH_RETRY_DELAY_ENV] = "1";
 		tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-ai-auth-oauth-race-"));
 		store = await SqliteAuthCredentialStore.open(path.join(tempDir, "agent.db"));
 		events = [];
@@ -38,6 +47,7 @@ describe("AuthStorage OAuth refresh race", () => {
 	afterEach(async () => {
 		vi.restoreAllMocks();
 		setSystemTime();
+		delete process.env[DEFINITIVE_REFRESH_RETRY_DELAY_ENV];
 		oauthUtils.unregisterOAuthProviders("auth-storage-oauth-refresh-race-test");
 		store?.close();
 		store = null;
@@ -832,22 +842,26 @@ describe("AuthStorage OAuth refresh race", () => {
 		const stealLease = store.tryAcquireCredentialRefreshLease?.bind(store);
 		if (!stealLease) throw new Error("test store does not support refresh leases");
 		const disableSpy = vi.spyOn(store, "tryDisableAuthCredentialIfMatches");
+		let refreshAttempts = 0;
 
 		const result = await authStorage.oauth.refreshStored("unit-oauth-lease-disable", {
 			credentialFromRow: row => row,
 			forceRefresh: true,
 			refresh: async () => {
 				// The row still contains the same stale refresh token. Only the lease
-				// fence distinguishes stale owner A from the current row owner.
+				// fence distinguishes stale owner A from the current row owner. The
+				// first attempt hands that lease to the peer; the bounded retries must
+				// not reclaim it, so they keep observing the peer's lease.
+				refreshAttempts += 1;
 				setSystemTime(new Date(now + 16_000));
-				expect(stealLease(credentialId, "peer-owner", now + 31_000)).toBe(true);
+				expect(stealLease(credentialId, "peer-owner", now + 31_000)).toBe(refreshAttempts === 1);
 				throw new Error('HTTP 400 invalid_grant {"error":"invalid_grant"}');
 			},
 			isDefinitiveFailure: error => error instanceof Error && error.message.includes("invalid_grant"),
 			disabledCause: error => `oauth refresh failed: ${error instanceof Error ? error.message : String(error)}`,
 		});
 
-		expect(disableSpy).toHaveBeenCalled();
+		expect(disableSpy).toHaveBeenCalledTimes(1);
 		expect(result).toMatchObject({ refreshed: false, removed: false });
 		expect(result.credential).toMatchObject({
 			type: "oauth",
@@ -979,20 +993,25 @@ describe("AuthStorage OAuth refresh race", () => {
 			},
 			async refreshToken() {
 				refreshCalls += 1;
-				if (refreshCalls > 1) controller.abort(new Error("unexpected retry"));
+				// The bounded retries run first; anything past them would mean the
+				// loop kept going after the disable CAS loss.
+				if (refreshCalls > DEFINITIVE_REFRESH_ATTEMPTS) controller.abort(new Error("unexpected retry"));
 				throw new Error('HTTP 400 invalid_grant {"error":"invalid_grant"}');
 			},
 			getApiKey(credentials) {
 				return credentials.access;
 			},
 		});
-		vi.spyOn(store, "tryDisableAuthCredentialIfMatches").mockReturnValue(false);
+		const disableSpy = vi.spyOn(store, "tryDisableAuthCredentialIfMatches").mockReturnValue(false);
 
 		await expect(
 			authStorage.keys.get("unit-oauth-definitive-cas-loss", "session-cas-loss", {
 				signal: controller.signal,
 			}),
 		).resolves.toBeUndefined();
-		expect(refreshCalls).toBe(1);
+		expect(refreshCalls).toBe(DEFINITIVE_REFRESH_ATTEMPTS);
+		// A lost disable CAS is terminal for this refresh: the disable is attempted
+		// once and never retried.
+		expect(disableSpy).toHaveBeenCalledTimes(1);
 	});
 });

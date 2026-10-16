@@ -1,4 +1,4 @@
-import { logger } from "@oh-my-pi/pi-utils";
+import { $envpos, logger } from "@oh-my-pi/pi-utils";
 import * as AIError from "../error";
 import { getOAuthProvider, normalizeOAuthCredentialExpiry, refreshOAuthToken } from "../registry/oauth";
 import type { OAuthCredentials, OAuthProvider } from "../registry/oauth/types";
@@ -42,6 +42,15 @@ const OAUTH_REFRESH_LEASE_POLL_MS = 50;
 const OAUTH_REFRESH_LEASE_RENEW_MS = 5_000;
 const OAUTH_REFRESH_OPERATION_TIMEOUT_MS = 10_000;
 const DEFAULT_OAUTH_REFRESH_TIMEOUT_MS = 10_000;
+/**
+ * Bounded retries for a "definitive" refresh failure (e.g. `invalid_grant`)
+ * before the credential is permanently disabled. Google's token endpoint
+ * returns `invalid_grant` for transient conditions too — concurrent refresh
+ * races and endpoint blips — and disable is irreversible, so a single bad
+ * response must not cost a healthy grant.
+ */
+export const OAUTH_DEFINITIVE_REFRESH_RETRIES = 2;
+const OAUTH_DEFINITIVE_REFRESH_RETRY_DELAY_MS = 1_000;
 
 type OrganizationScope = Pick<
 	OAuthCredentials,
@@ -265,66 +274,88 @@ export class OAuthRefresher {
 							leaseRenewalError = error;
 						})
 					: undefined;
-			const refreshAbort = new AbortController();
-			const refreshTimeout = setTimeout(() => {
-				refreshAbort.abort(
-					new AIError.OAuthError(`OAuth token refresh timed out for provider: ${provider}`, {
-						kind: "timeout",
-						provider,
-					}),
-				);
-			}, options.refreshTimeoutMs ?? OAUTH_REFRESH_OPERATION_TIMEOUT_MS);
-
 			let refreshed: OAuthCredentials;
 			try {
-				try {
-					refreshed = await options.refresh(current, refreshAbort.signal);
-				} catch (error) {
-					if (options.isDefinitiveFailure?.(error)) {
-						const disabledCause = options.disabledCause?.(error) ?? `oauth refresh failed: ${String(error)}`;
-						const disabled = this.#deps.store.tryDisableAuthCredentialIfMatches(
-							row.id,
-							serialized.data,
-							disabledCause,
-							leasedCredentialId !== undefined ? { owner, nowMs: Date.now() } : undefined,
-						);
-						if (disabled) {
-							this.#deps.pool.replace(
+				const retryDelayMs = $envpos(
+					"OAUTH_DEFINITIVE_REFRESH_RETRY_DELAY_MS",
+					OAUTH_DEFINITIVE_REFRESH_RETRY_DELAY_MS,
+				);
+				for (let attempt = 1; ; attempt += 1) {
+					const refreshAbort = new AbortController();
+					const refreshTimeout = setTimeout(() => {
+						refreshAbort.abort(
+							new AIError.OAuthError(`OAuth token refresh timed out for provider: ${provider}`, {
+								kind: "timeout",
 								provider,
-								rows
-									.filter(entry => entry.id !== row.id)
-									.map(entry => ({
-										id: entry.id,
-										credential: entry.credential,
-									})),
-							);
-							this.#deps.pool.reset(provider);
-							this.#deps.pool.emitDisabled(credentialDisabledEvent(provider, row, disabledCause));
-							return { credential: undefined, refreshed: false, removed: true };
+							}),
+						);
+					}, options.refreshTimeoutMs ?? OAUTH_REFRESH_OPERATION_TIMEOUT_MS);
+					try {
+						refreshed = await options.refresh(current, refreshAbort.signal);
+						break;
+					} catch (error) {
+						const definitive = options.isDefinitiveFailure?.(error) === true;
+						if (definitive && attempt <= OAUTH_DEFINITIVE_REFRESH_RETRIES) {
+							// Google's token endpoint 400s `invalid_grant` transiently
+							// (concurrent refresh races, endpoint blips). Retry with linear
+							// backoff before the disable path permanently removes a
+							// possibly-healthy grant.
+							logger.warn("OAuth refresh definitive failure; retrying before disable", {
+								provider,
+								attempt,
+								attempts: OAUTH_DEFINITIVE_REFRESH_RETRIES + 1,
+								error: String(error),
+							});
+							await Bun.sleep(retryDelayMs * attempt);
+							continue;
 						}
-						await this.#deps.pool.reload();
-						const latest = this.#deps.pool.entries(provider).find(entry => entry.id === row.id)?.credential;
-						return {
-							credential: latest?.type === "oauth" ? options.credentialFromRow(latest) : undefined,
-							refreshed: false,
-							removed: false,
-						};
+						if (definitive) {
+							const disabledCause = options.disabledCause?.(error) ?? `oauth refresh failed: ${String(error)}`;
+							const disabled = this.#deps.store.tryDisableAuthCredentialIfMatches(
+								row.id,
+								serialized.data,
+								disabledCause,
+								leasedCredentialId !== undefined ? { owner, nowMs: Date.now() } : undefined,
+							);
+							if (disabled) {
+								this.#deps.pool.replace(
+									provider,
+									rows
+										.filter(entry => entry.id !== row.id)
+										.map(entry => ({
+											id: entry.id,
+											credential: entry.credential,
+										})),
+								);
+								this.#deps.pool.reset(provider);
+								this.#deps.pool.emitDisabled(credentialDisabledEvent(provider, row, disabledCause));
+								return { credential: undefined, refreshed: false, removed: true };
+							}
+							await this.#deps.pool.reload();
+							const latest = this.#deps.pool.entries(provider).find(entry => entry.id === row.id)?.credential;
+							return {
+								credential: latest?.type === "oauth" ? options.credentialFromRow(latest) : undefined,
+								refreshed: false,
+								removed: false,
+							};
+						}
+						options.onRefreshFailure?.(error);
+						const keepCredential =
+							typeof options.keepCredentialOnRefreshFailure === "function"
+								? options.keepCredentialOnRefreshFailure(error)
+								: options.keepCredentialOnRefreshFailure === true;
+						if (keepCredential) {
+							return { credential: current, refreshed: false, removed: false };
+						}
+						throw error;
+					} finally {
+						clearTimeout(refreshTimeout);
 					}
-					options.onRefreshFailure?.(error);
-					const keepCredential =
-						typeof options.keepCredentialOnRefreshFailure === "function"
-							? options.keepCredentialOnRefreshFailure(error)
-							: options.keepCredentialOnRefreshFailure === true;
-					if (keepCredential) {
-						return { credential: current, refreshed: false, removed: false };
-					}
-					throw error;
 				}
 			} finally {
 				stopLeaseRenewal = true;
 				leaseRenewalStopped.resolve();
 				await leaseRenewal;
-				clearTimeout(refreshTimeout);
 			}
 			if (leaseRenewalError) throw leaseRenewalError;
 
