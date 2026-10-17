@@ -42,11 +42,6 @@ const originalProxyEnv: Record<string, string | undefined> = {
 	no_proxy: Bun.env.no_proxy,
 };
 const TEST_INSTALLATION_ID = "00000000-0000-4000-8000-000000000001";
-/** The whitespace-delta caps are read at use; tests below assert the shipped ones. */
-const originalWhitespaceCaps: Record<string, string | undefined> = {
-	PI_CODEX_WHITESPACE_DELTA_EVENT_LIMIT: Bun.env.PI_CODEX_WHITESPACE_DELTA_EVENT_LIMIT,
-	PI_CODEX_WHITESPACE_DELTA_CHAR_LIMIT: Bun.env.PI_CODEX_WHITESPACE_DELTA_CHAR_LIMIT,
-};
 
 function restoreEnv(name: string, value: string | undefined): void {
 	if (value === undefined) {
@@ -58,11 +53,6 @@ function restoreEnv(name: string, value: string | undefined): void {
 
 beforeEach(() => {
 	for (const key in originalProxyEnv) delete Bun.env[key];
-	// Pin the caps this file's breaker tests measure, then restore the caller's
-	// values afterwards: the caps are read at use, so an exported override would
-	// otherwise change what the tests assert.
-	Bun.env.PI_CODEX_WHITESPACE_DELTA_EVENT_LIMIT = "256";
-	Bun.env.PI_CODEX_WHITESPACE_DELTA_CHAR_LIMIT = String(16 * 1024);
 	__resetProxyCache();
 	vi.spyOn(piUtils, "getInstallId").mockReturnValue(TEST_INSTALLATION_ID);
 });
@@ -72,7 +62,6 @@ afterEach(() => {
 	setAgentDir(originalAgentDir);
 	vi.useRealTimers();
 	for (const key in originalProxyEnv) restoreEnv(key, originalProxyEnv[key]);
-	for (const key in originalWhitespaceCaps) restoreEnv(key, originalWhitespaceCaps[key]);
 	__resetProxyCache();
 	vi.restoreAllMocks();
 });
