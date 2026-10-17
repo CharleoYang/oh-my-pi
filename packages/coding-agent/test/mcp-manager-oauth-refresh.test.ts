@@ -520,8 +520,11 @@ describe("MCPManager shared SQLite OAuth refresh", () => {
 
 				const resolved = await prepared;
 
-				expect(refreshRequests).toBe(DEFINITIVE_REFRESH_ATTEMPTS);
-				expect(refreshTokens).toEqual(Array(DEFINITIVE_REFRESH_ATTEMPTS).fill(SHARED_STALE_REFRESH));
+				// The peer rotated the stored row while this attempt was in flight, so the
+				// retry loop stops after the first failure and the CAS path adopts the peer
+				// credential. Sending the stale refresh token again could invalidate it.
+				expect(refreshRequests).toBe(1);
+				expect(refreshTokens).toEqual([SHARED_STALE_REFRESH]);
 				expect(getAuthorizationHeader(resolved)).toBe(`Bearer ${SHARED_FRESH_ACCESS}`);
 
 				await authA.credentials.reload();

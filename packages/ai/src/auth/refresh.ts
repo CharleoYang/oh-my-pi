@@ -307,18 +307,28 @@ export class OAuthRefresher {
 							attempt <= OAUTH_DEFINITIVE_REFRESH_RETRIES &&
 							OAUTH_RETRYABLE_DEFINITIVE_FAILURE_PATTERN.test(String(error));
 						if (retryable) {
-							// Ownership first: a peer that took the lease over must not be raced
-							// by another token request from this stale owner — a rotating grant
-							// that still succeeded here would invalidate the token the peer just
-							// persisted. Renewing also keeps the retry window inside the lease.
+							// A peer that rotated the row without taking the lease (a concurrent
+							// login through `replaceAuthCredentials`) leaves this snapshot stale:
+							// retrying would submit the dead refresh token again, and a success
+							// there would invalidate the token the peer just persisted. Fall
+							// through to the disable/CAS path, which reloads the peer's row.
+							const persistedCredential = this.#deps.store
+								.listAuthCredentials(provider)
+								.find(entry => entry.id === row.id)?.credential;
+							const rotated =
+								persistedCredential?.type === "oauth" && persistedCredential.refresh !== current.refresh;
+							// Ownership next: a peer that took the lease over must not be raced
+							// by another token request from this stale owner. Renewing also keeps
+							// the retry window inside the lease.
 							const ownsLease =
-								leasedCredentialId === undefined ||
-								(leaseStore !== undefined &&
-									leaseStore.renewCredentialRefreshLease(
-										leasedCredentialId,
-										owner,
-										Date.now() + OAUTH_REFRESH_LEASE_TTL_MS,
-									));
+								!rotated &&
+								(leasedCredentialId === undefined ||
+									(leaseStore !== undefined &&
+										leaseStore.renewCredentialRefreshLease(
+											leasedCredentialId,
+											owner,
+											Date.now() + OAUTH_REFRESH_LEASE_TTL_MS,
+										)));
 							if (ownsLease) {
 								logger.warn("OAuth refresh definitive failure; retrying before disable", {
 									provider,
