@@ -331,12 +331,21 @@ const CODEX_WHITESPACE_TOOL_CALL_ARGUMENT_DELTA_CHAR_LIMIT_DEFAULT = 16 * 1024;
  * the module was imported, and tests do not have to scrub a process-wide
  * environment before the provider is evaluated.
  */
-export function resolveCodexWhitespaceDeltaCaps(
-	env: Record<string, string | undefined> = $env,
-): { events: number; chars: number } {
+export function resolveCodexWhitespaceDeltaCaps(env: Record<string, string | undefined> = $env): {
+	events: number;
+	chars: number;
+} {
 	return {
-		events: $envposExact("PI_CODEX_WHITESPACE_DELTA_EVENT_LIMIT", CODEX_WHITESPACE_TOOL_CALL_ARGUMENT_DELTA_EVENT_LIMIT_DEFAULT, env),
-		chars: $envposExact("PI_CODEX_WHITESPACE_DELTA_CHAR_LIMIT", CODEX_WHITESPACE_TOOL_CALL_ARGUMENT_DELTA_CHAR_LIMIT_DEFAULT, env),
+		events: $envposExact(
+			"PI_CODEX_WHITESPACE_DELTA_EVENT_LIMIT",
+			CODEX_WHITESPACE_TOOL_CALL_ARGUMENT_DELTA_EVENT_LIMIT_DEFAULT,
+			env,
+		),
+		chars: $envposExact(
+			"PI_CODEX_WHITESPACE_DELTA_CHAR_LIMIT",
+			CODEX_WHITESPACE_TOOL_CALL_ARGUMENT_DELTA_CHAR_LIMIT_DEFAULT,
+			env,
+		),
 	};
 }
 const CODEX_WHITESPACE_LOOP_RETRY_LIMIT = 2;
