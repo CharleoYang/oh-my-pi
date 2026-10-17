@@ -1462,7 +1462,7 @@ function createCodexRequestContext(
 
 	const transportSessionId = normalizeOpenAIPromptCacheKey(options?.sessionId);
 	const codexClientVersion = CODEX_CLIENT_VERSION;
-	const requestHeaders = { ...model.headers, ...options?.headers };
+	const requestHeaders = mergeRequestHeaders(model.headers, options?.headers);
 	const rawRequestDump: RawHttpRequestDump = {
 		provider: model.provider,
 		api: model.api,
@@ -4996,14 +4996,47 @@ function redactHeaders(headers: Headers): Record<string, string> {
 export function resolveCodexResponsesUrl(baseUrl: string | undefined): string {
 	const raw = baseUrl && baseUrl.trim().length > 0 ? baseUrl : CODEX_BASE_URL;
 	const normalized = raw.replace(/\/+$/, "");
-	if (normalized.endsWith("/codex/responses")) return normalized;
+	// Match the pathname only. Matching the whole serialized URL would mistake a
+	// host literally named `responses` for an explicit endpoint, and a query
+	// string for part of the path — appending `/codex/responses` there would
+	// corrupt the query instead of reaching an endpoint.
+	const queryStart = normalized.search(/[?#]/u);
+	const base = queryStart === -1 ? normalized : normalized.slice(0, queryStart);
+	const suffix = queryStart === -1 ? "" : normalized.slice(queryStart);
+	const trimmedBase = base.replace(/\/+$/u, "");
+	let pathname = trimmedBase;
+	try {
+		pathname = new URL(base).pathname.replace(/\/+$/u, "");
+	} catch {
+		// A relative or otherwise non-absolute base keeps the whole-string match.
+	}
+	if (pathname.endsWith("/codex/responses")) return normalized;
 	// A provider already targeting the plain Responses endpoint (a gateway wired
 	// like Codex's own `wire_api = "responses"`) keeps its exact path. Only the
 	// official ChatGPT backend and `/codex`-suffixed hosts get the
 	// `/codex/responses` mapping.
-	if (normalized.endsWith("/responses")) return normalized;
-	if (normalized.endsWith("/codex")) return `${normalized}/responses`;
-	return `${normalized}/codex/responses`;
+	if (pathname.endsWith("/responses")) return normalized;
+	if (pathname.endsWith("/codex")) return `${trimmedBase}/responses${suffix}`;
+	return `${trimmedBase}/codex/responses${suffix}`;
+}
+
+/**
+ * Merge two header maps case-insensitively. A plain spread keeps `user-agent`
+ * and `User-Agent` as separate entries, and `new Headers` then joins them into a
+ * single comma-separated value, so an override with different casing would
+ * arrive as `model-value, caller-value` instead of replacing the model's value.
+ */
+function mergeRequestHeaders(
+	base: Record<string, string> | undefined,
+	overrides: Record<string, string> | undefined,
+): Record<string, string> {
+	if (!base || !overrides) return { ...base, ...overrides };
+	const overridden = new Set(Object.keys(overrides).map(key => key.toLowerCase()));
+	const merged: Record<string, string> = {};
+	for (const [key, value] of Object.entries(base)) {
+		if (!overridden.has(key.toLowerCase())) merged[key] = value;
+	}
+	return { ...merged, ...overrides };
 }
 
 function convertMessages(model: Model<"openai-codex-responses">, context: Context): ResponseInput {

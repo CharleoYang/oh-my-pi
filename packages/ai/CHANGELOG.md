@@ -18,6 +18,9 @@
 - Fixed Anthropic requests hanging forever on Bun 1.3 when the upstream accepted the request but never sent headers: aborting the request (including the first-event timeout) now fails it, so the turn retries instead of waiting until the user interrupts it ([#16010](https://github.com/can1357/oh-my-pi/pull/16010) by [@ca-io-systems](https://github.com/ca-io-systems))
 - Fixed the auth gateway's `POST /v1/chat/completions` streams being dropped (`terminated`) after ~255 s without upstream output, e.g. while xAI generates a large tool call's arguments, which arrive only when complete; the stream now sends an SSE `: keepalive` comment every 15 s ([#15940](https://github.com/can1357/oh-my-pi/pull/15940) by [@radkawar](https://github.com/radkawar))
 - Fixed Anthropic models with mid-conversation system messages (e.g. Claude Opus 5.5) receiving `@file` mention contents and hidden extension messages as a trailing `system` message instead of ending the request on the user's turn ([#15881](https://github.com/can1357/oh-my-pi/issues/15881))
+### Fixed
+
+- Fixed Codex Responses providers whose base URL already ends in `/responses` being sent to `/codex/responses`: the endpoint mapping now compares the URL pathname, so a host named `responses` and any query string are left intact. An explicit `originator`/`User-Agent` from the provider configuration is preserved instead of being overwritten by the transport defaults, and a per-call identity header replaces a differently-cased model header instead of being comma-joined with it.
 
 ## [18.11.2] - 2026-10-16
 
