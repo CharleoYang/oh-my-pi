@@ -89,17 +89,23 @@ describe("Codex whitespace-delta caps", () => {
 	});
 
 	it("interrupts a keep-alive stream once the configured cap is reached", async () => {
-		await withEnv({ PI_CODEX_WHITESPACE_DELTA_EVENT_LIMIT: "8" }, async () => {
-			const result = await runWhitespaceStream(12);
-			expect(result.stopReason).toBe("error");
-			expect(result.errorMessage).toContain("whitespace-only tool-call argument delta");
-		});
+		await withEnv(
+			{ PI_CODEX_WHITESPACE_DELTA_EVENT_LIMIT: "8", PI_CODEX_WHITESPACE_DELTA_CHAR_LIMIT: String(16 * 1024) },
+			async () => {
+				const result = await runWhitespaceStream(12);
+				expect(result.stopReason).toBe("error");
+				expect(result.errorMessage).toContain("whitespace-only tool-call argument delta");
+			},
+		);
 	});
 
 	it("lets the same stream through under the shipped cap", async () => {
-		await withEnv({ PI_CODEX_WHITESPACE_DELTA_EVENT_LIMIT: undefined }, async () => {
-			const result = await runWhitespaceStream(12);
-			expect(result.stopReason).toBe("toolUse");
-		});
+		await withEnv(
+			{ PI_CODEX_WHITESPACE_DELTA_EVENT_LIMIT: undefined, PI_CODEX_WHITESPACE_DELTA_CHAR_LIMIT: undefined },
+			async () => {
+				const result = await runWhitespaceStream(12);
+				expect(result.stopReason).toBe("toolUse");
+			},
+		);
 	});
 });
