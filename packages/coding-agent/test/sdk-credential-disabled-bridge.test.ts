@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -16,9 +16,17 @@ import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manage
 import { removeSyncWithRetries, Snowflake } from "@oh-my-pi/pi-utils";
 
 // A definitive refresh failure is retried a bounded number of times before the
-// credential is disabled, so keep the backoff at 1ms: the default 1s linear
-// schedule would push the mocked-refresh failures past the per-test timeout.
-process.env.OAUTH_DEFINITIVE_REFRESH_RETRY_DELAY_MS = "1";
+// credential is disabled. Keep the backoff at 1ms for these tests and restore the
+// caller's value afterwards: a process-wide override would change the retry
+// cadence of every later test file that shares this worker.
+const PREVIOUS_RETRY_DELAY = process.env.OAUTH_DEFINITIVE_REFRESH_RETRY_DELAY_MS;
+beforeEach(() => {
+	process.env.OAUTH_DEFINITIVE_REFRESH_RETRY_DELAY_MS = "1";
+});
+afterEach(() => {
+	if (PREVIOUS_RETRY_DELAY === undefined) delete process.env.OAUTH_DEFINITIVE_REFRESH_RETRY_DELAY_MS;
+	else process.env.OAUTH_DEFINITIVE_REFRESH_RETRY_DELAY_MS = PREVIOUS_RETRY_DELAY;
+});
 
 interface SessionDirs {
 	cwd: string;
