@@ -22,8 +22,17 @@ import type { MCPServerConfig } from "@oh-my-pi/pi-coding-agent/mcp/types";
 import { removeWithRetries } from "@oh-my-pi/pi-utils";
 
 // A definitive `invalid_grant` is retried a bounded number of times before the
-// credential is cleared; 1ms keeps that cadence from slowing the suite down.
-process.env.OAUTH_DEFINITIVE_REFRESH_RETRY_DELAY_MS = "1";
+// credential is cleared. Keep the backoff at 1ms for these tests, but scope it:
+// a process-wide override would change the retry cadence of every later test
+// file that shares this worker.
+const PREVIOUS_RETRY_DELAY = process.env.OAUTH_DEFINITIVE_REFRESH_RETRY_DELAY_MS;
+beforeEach(() => {
+	process.env.OAUTH_DEFINITIVE_REFRESH_RETRY_DELAY_MS = "1";
+});
+afterEach(() => {
+	if (PREVIOUS_RETRY_DELAY === undefined) delete process.env.OAUTH_DEFINITIVE_REFRESH_RETRY_DELAY_MS;
+	else process.env.OAUTH_DEFINITIVE_REFRESH_RETRY_DELAY_MS = PREVIOUS_RETRY_DELAY;
+});
 /** One initial attempt plus the bounded definitive-failure retries. */
 const DEFINITIVE_REFRESH_ATTEMPTS = 1 + OAUTH_DEFINITIVE_REFRESH_RETRIES;
 

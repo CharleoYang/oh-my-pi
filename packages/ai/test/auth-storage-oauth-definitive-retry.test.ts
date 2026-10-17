@@ -10,6 +10,7 @@ import { removeWithRetries } from "../../utils/src/temp";
 const PROVIDER = "unit-definitive-retry";
 const SOURCE = "auth-storage-oauth-definitive-retry-test";
 const RETRY_DELAY_ENV = "OAUTH_DEFINITIVE_REFRESH_RETRY_DELAY_MS";
+const PREVIOUS_RETRY_DELAY = process.env[RETRY_DELAY_ENV];
 const EXPECTED_ATTEMPTS = 3; // 1 initial + OAUTH_DEFINITIVE_REFRESH_RETRIES
 
 function farExpiry(): number {
@@ -33,7 +34,8 @@ describe("AuthStorage definitive OAuth refresh retry", () => {
 	});
 
 	afterEach(async () => {
-		delete process.env[RETRY_DELAY_ENV];
+		if (PREVIOUS_RETRY_DELAY === undefined) delete process.env[RETRY_DELAY_ENV];
+		else process.env[RETRY_DELAY_ENV] = PREVIOUS_RETRY_DELAY;
 		unregisterOAuthProviders(SOURCE);
 		store?.close();
 		store = undefined;
@@ -102,6 +104,26 @@ describe("AuthStorage definitive OAuth refresh retry", () => {
 		const disabled = await store.listDisabledCredentials(PROVIDER);
 		expect(disabled).toHaveLength(1);
 		expect(String(disabled[0]?.cause)).toContain("invalid_grant");
+	});
+
+	test("a revoked or unauthorized grant still disables on the first failure", async () => {
+		if (!authStorage || !store) throw new Error("test setup failed");
+		let refreshCalls = 0;
+		registerProvider(async () => {
+			refreshCalls += 1;
+			throw new Error('400 {"error":"unauthorized_client","error_description":"client is not authorized"}');
+		});
+		await authStorage.credentials.set(PROVIDER, [
+			{ type: "oauth", access: "stale-access", refresh: "stale-refresh", expires: Date.now() - 1_000 },
+		]);
+
+		const key = await authStorage.keys.get(PROVIDER, "s-revoked");
+		expect(key).toBeUndefined();
+		// Only `invalid_grant` is retried: a dead grant must not cost two more
+		// token requests before the credential is disabled.
+		expect(refreshCalls).toBe(1);
+		expect(store.listAuthCredentials(PROVIDER)).toHaveLength(0);
+		expect(await store.listDisabledCredentials(PROVIDER)).toHaveLength(1);
 	});
 
 	test("non-definitive failures are not retried", async () => {

@@ -44,6 +44,9 @@
 ### Removed
 
 - Removed the built-in `rs-parking-lot` rule; Rust edits using `std::sync::{Mutex, RwLock}` with `.lock().unwrap()` are no longer steered to `parking_lot`
+### Fixed
+
+- Fixed managed MCP OAuth connections and SDK sessions disabling a credential on one transient `invalid_grant` response: the shared refresher now retries it twice before tearing the credential down (see `@oh-my-pi/pi-ai`). Explicitly revoked or unauthorized grants are still disabled immediately.
 
 ## [18.11.2] - 2026-10-16
 

@@ -51,6 +51,13 @@ const DEFAULT_OAUTH_REFRESH_TIMEOUT_MS = 10_000;
  */
 export const OAUTH_DEFINITIVE_REFRESH_RETRIES = 2;
 const OAUTH_DEFINITIVE_REFRESH_RETRY_DELAY_MS = 1_000;
+/**
+ * The only definitive failure that is retried. `unauthorized_client`, explicit
+ * `revoked`/`invalid_token` and a bare 401 mean the grant itself is dead, so
+ * they still disable immediately; the token endpoint also emits `invalid_grant`
+ * for transient races and endpoint blips, and disable is irreversible.
+ */
+const OAUTH_RETRYABLE_DEFINITIVE_FAILURE_PATTERN = /invalid_grant/i;
 
 type OrganizationScope = Pick<
 	OAuthCredentials,
@@ -295,19 +302,40 @@ export class OAuthRefresher {
 						break;
 					} catch (error) {
 						const definitive = options.isDefinitiveFailure?.(error) === true;
-						if (definitive && attempt <= OAUTH_DEFINITIVE_REFRESH_RETRIES) {
-							// Google's token endpoint 400s `invalid_grant` transiently
-							// (concurrent refresh races, endpoint blips). Retry with linear
-							// backoff before the disable path permanently removes a
-							// possibly-healthy grant.
-							logger.warn("OAuth refresh definitive failure; retrying before disable", {
-								provider,
-								attempt,
-								attempts: OAUTH_DEFINITIVE_REFRESH_RETRIES + 1,
-								error: String(error),
-							});
-							await Bun.sleep(retryDelayMs * attempt);
-							continue;
+						const retryable =
+							definitive &&
+							attempt <= OAUTH_DEFINITIVE_REFRESH_RETRIES &&
+							OAUTH_RETRYABLE_DEFINITIVE_FAILURE_PATTERN.test(String(error));
+						if (retryable) {
+							// Ownership first: a peer that took the lease over must not be raced
+							// by another token request from this stale owner — a rotating grant
+							// that still succeeded here would invalidate the token the peer just
+							// persisted. Renewing also keeps the retry window inside the lease.
+							const ownsLease =
+								leasedCredentialId === undefined ||
+								(leaseStore !== undefined &&
+									leaseStore.renewCredentialRefreshLease(
+										leasedCredentialId,
+										owner,
+										Date.now() + OAUTH_REFRESH_LEASE_TTL_MS,
+									));
+							if (ownsLease) {
+								logger.warn("OAuth refresh definitive failure; retrying before disable", {
+									provider,
+									attempt,
+									attempts: OAUTH_DEFINITIVE_REFRESH_RETRIES + 1,
+									error: String(error),
+								});
+								// Race the backoff against the caller's signal: cancellation must
+								// release the lease instead of holding it through the sleep and
+								// issuing another token request with an aborted signal.
+								await raceSignal(
+									Bun.sleep(retryDelayMs * attempt),
+									options.signal,
+									"OAuth refresh retry backoff aborted by caller",
+								);
+								continue;
+							}
 						}
 						if (definitive) {
 							const disabledCause = options.disabledCause?.(error) ?? `oauth refresh failed: ${String(error)}`;
