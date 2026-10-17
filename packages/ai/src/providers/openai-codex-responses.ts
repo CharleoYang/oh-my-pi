@@ -5032,13 +5032,23 @@ function mergeRequestHeaders(
 	base: Record<string, string> | undefined,
 	overrides: Record<string, string> | undefined,
 ): Record<string, string> {
-	if (!base || !overrides) return { ...base, ...overrides };
-	const overridden = new Set(Object.keys(overrides).map(key => key.toLowerCase()));
+	// Later entries win, and keys compare case-insensitively across both sources:
+	// a provider config can carry `User-Agent` and `user-agent` as separate entries
+	// (config keys keep their exact casing), and `new Headers` would join whatever
+	// survives into one comma-separated value.
 	const merged: Record<string, string> = {};
-	for (const [key, value] of Object.entries(base)) {
-		if (!overridden.has(key.toLowerCase())) merged[key] = value;
+	const canonicalKeys = new Map<string, string>();
+	for (const source of [base, overrides]) {
+		if (!source) continue;
+		for (const [key, value] of Object.entries(source)) {
+			const canonical = key.toLowerCase();
+			const previous = canonicalKeys.get(canonical);
+			if (previous !== undefined) delete merged[previous];
+			canonicalKeys.set(canonical, key);
+			merged[key] = value;
+		}
 	}
-	return { ...merged, ...overrides };
+	return merged;
 }
 
 function convertMessages(model: Model<"openai-codex-responses">, context: Context): ResponseInput {

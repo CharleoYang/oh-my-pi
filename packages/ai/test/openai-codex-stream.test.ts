@@ -522,6 +522,30 @@ describe("openai-codex streaming", () => {
 		expect(requestHeaders?.get("User-Agent")).toBe("per-call/1.0");
 	});
 
+	it("collapses casing variants inside the model headers themselves", async () => {
+		let requestHeaders: Headers | undefined;
+		const fetchMock: FetchImpl = async (_input, init) => {
+			requestHeaders = init?.headers instanceof Headers ? init.headers : new Headers(init?.headers);
+			return new Response(createCompletedCodexSse("Hello"), {
+				status: 200,
+				headers: { "content-type": "text/event-stream" },
+			});
+		};
+
+		const result = await streamOpenAICodexResponses(
+			{
+				...createCodexTestModel("https://gateway.example/responses"),
+				preferWebsockets: false,
+				headers: { "User-Agent": "first/1.0", "user-agent": "second/2.0" },
+			},
+			createCodexTestContext(),
+			{ apiKey: "gateway-key", fetch: fetchMock },
+		).result();
+
+		expect(result.stopReason).toBe("stop");
+		expect(requestHeaders?.get("User-Agent")).toBe("second/2.0");
+	});
+
 	it("omits chatgpt account headers for opaque custom provider API keys", async () => {
 		const tempDir = TempDir.createSync("@pi-codex-stream-");
 		setAgentDir(tempDir.path());
