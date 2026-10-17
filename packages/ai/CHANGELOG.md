@@ -5,6 +5,7 @@
 ### Added
 
 - Added `prewarmAnthropicConnection(model)`, which opens the official Anthropic API connection for a first-party `anthropic` model ahead of a request, using the same transport and TLS settings so the request reuses it instead of paying the connection handshake ([#16044](https://github.com/can1357/oh-my-pi/pull/16044) by [@H4vC](https://github.com/H4vC))
+- Added `PI_CODEX_WHITESPACE_DELTA_EVENT_LIMIT` and `PI_CODEX_WHITESPACE_DELTA_CHAR_LIMIT` to raise the Codex transport's whitespace-only tool-call argument cap for gateways that stream those deltas as keep-alive ([#16022](https://github.com/can1357/oh-my-pi/pull/16022) by [@yangqi45](https://github.com/yangqi45))
 
 ### Changed
 
@@ -18,7 +19,6 @@
 - Fixed Anthropic requests hanging forever on Bun 1.3 when the upstream accepted the request but never sent headers: aborting the request (including the first-event timeout) now fails it, so the turn retries instead of waiting until the user interrupts it ([#16010](https://github.com/can1357/oh-my-pi/pull/16010) by [@ca-io-systems](https://github.com/ca-io-systems))
 - Fixed the auth gateway's `POST /v1/chat/completions` streams being dropped (`terminated`) after ~255 s without upstream output, e.g. while xAI generates a large tool call's arguments, which arrive only when complete; the stream now sends an SSE `: keepalive` comment every 15 s ([#15940](https://github.com/can1357/oh-my-pi/pull/15940) by [@radkawar](https://github.com/radkawar))
 - Fixed Anthropic models with mid-conversation system messages (e.g. Claude Opus 5.5) receiving `@file` mention contents and hidden extension messages as a trailing `system` message instead of ending the request on the user's turn ([#15881](https://github.com/can1357/oh-my-pi/issues/15881))
-- Added `PI_CODEX_WHITESPACE_DELTA_EVENT_LIMIT` / `PI_CODEX_WHITESPACE_DELTA_CHAR_LIMIT` to raise the Codex transport's whitespace-only tool-call argument cap for gateways that stream those deltas as keep-alive. The caps are resolved at use, the shipped defaults (256 events / 16 KiB) apply to an unset, empty, non-numeric or non-positive value, and a partially numeric value such as `1e3` no longer shrinks the cap.
 
 ## [18.11.2] - 2026-10-16
 

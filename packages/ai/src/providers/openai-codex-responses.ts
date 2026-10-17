@@ -14,6 +14,7 @@ import {
 } from "@oh-my-pi/pi-catalog/wire/codex";
 import {
 	$env,
+	$envposExact,
 	$flag,
 	asRecord,
 	cloneJsonTree,
@@ -331,18 +332,11 @@ const CODEX_WHITESPACE_TOOL_CALL_ARGUMENT_DELTA_CHAR_LIMIT_DEFAULT = 16 * 1024;
  * environment before the provider is evaluated.
  */
 export function resolveCodexWhitespaceDeltaCaps(
-	env: Record<string, string> = $env,
+	env: Record<string, string | undefined> = $env,
 ): { events: number; chars: number } {
-	const cap = (name: string, fallback: number): number => {
-		const raw = env[name]?.trim();
-		// Require the whole value to be a positive decimal integer: `$envpos`'s
-		// `Number.parseInt` reads `1e3` as 1, silently shrinking the cap instead of
-		// ignoring the value.
-		return raw !== undefined && /^\d+$/u.test(raw) && Number(raw) > 0 ? Number(raw) : fallback;
-	};
 	return {
-		events: cap("PI_CODEX_WHITESPACE_DELTA_EVENT_LIMIT", CODEX_WHITESPACE_TOOL_CALL_ARGUMENT_DELTA_EVENT_LIMIT_DEFAULT),
-		chars: cap("PI_CODEX_WHITESPACE_DELTA_CHAR_LIMIT", CODEX_WHITESPACE_TOOL_CALL_ARGUMENT_DELTA_CHAR_LIMIT_DEFAULT),
+		events: $envposExact("PI_CODEX_WHITESPACE_DELTA_EVENT_LIMIT", CODEX_WHITESPACE_TOOL_CALL_ARGUMENT_DELTA_EVENT_LIMIT_DEFAULT, env),
+		chars: $envposExact("PI_CODEX_WHITESPACE_DELTA_CHAR_LIMIT", CODEX_WHITESPACE_TOOL_CALL_ARGUMENT_DELTA_CHAR_LIMIT_DEFAULT, env),
 	};
 }
 const CODEX_WHITESPACE_LOOP_RETRY_LIMIT = 2;
