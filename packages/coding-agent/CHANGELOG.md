@@ -266,6 +266,10 @@
 - Fixed MCP OAuth login requesting every scope in an authorization server's catalogue when the protected resource advertises no scopes; `/mcp reauth` now falls back to configured scopes or authorization-server defaults ([#15996](https://github.com/can1357/oh-my-pi/pull/15996) by [@unclesamwk](https://github.com/unclesamwk)).
 - Fixed the incomplete-todo stop reminder firing (and resuming work) when the agent's final message asks for permission or a decision before a closing status line, through "If you confirm, I'll…"/"Separately, tell me…"-style requests, or with a non-English question followed by another sentence ([#15986](https://github.com/can1357/oh-my-pi/issues/15986))
 
+### Fixed
+
+- Fixed managed MCP OAuth connections and SDK sessions disabling a credential on one transient `invalid_grant` response ([#16019](https://github.com/can1357/oh-my-pi/pull/16019) by [@yangqi45](https://github.com/yangqi45))
+
 ## [18.11.3] - 2026-10-16
 
 ### Breaking Changes
@@ -304,9 +308,6 @@
 ### Removed
 
 - Removed the built-in `rs-parking-lot` rule; Rust edits using `std::sync::{Mutex, RwLock}` with `.lock().unwrap()` are no longer steered to `parking_lot`
-### Fixed
-
-- Fixed managed MCP OAuth connections and SDK sessions disabling a credential on one transient `invalid_grant` response: the shared refresher now retries it twice before tearing the credential down (see `@oh-my-pi/pi-ai`). Explicitly revoked or unauthorized grants are still disabled immediately.
 
 ## [18.11.2] - 2026-10-16
 
