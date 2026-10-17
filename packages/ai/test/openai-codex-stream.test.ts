@@ -430,6 +430,8 @@ describe("openai-codex streaming", () => {
 			// A query must survive the mapping.
 			"https://gateway.example/v1/responses?token=x",
 			"https://gateway.example/v1?token=x",
+			// A query value ending in `/` must not have that slash trimmed.
+			"https://gateway.example/v1/responses?redirect=https://upstream/",
 		]) {
 			const model = { ...createCodexTestModel(baseUrl), preferWebsockets: false };
 			const result = await streamOpenAICodexResponses(model, context, {
@@ -448,6 +450,7 @@ describe("openai-codex streaming", () => {
 			"https://responses/codex/responses",
 			"https://gateway.example/v1/responses?token=x",
 			"https://gateway.example/v1/codex/responses?token=x",
+			"https://gateway.example/v1/responses?redirect=https://upstream/",
 		]);
 	});
 

@@ -3431,7 +3431,7 @@ export async function prewarmOpenAICodexResponses(
 	const headers = logger.time(
 		"prewarmCodex:createHeaders",
 		createCodexHeaders,
-		{ ...model.headers, ...options?.headers },
+		mergeRequestHeaders(model.headers, options?.headers),
 		accountId,
 		apiKey,
 		codexClientVersion,
@@ -4995,15 +4995,17 @@ function redactHeaders(headers: Headers): Record<string, string> {
 /** Resolve a Codex Responses endpoint exactly as the chat and compaction transports do. */
 export function resolveCodexResponsesUrl(baseUrl: string | undefined): string {
 	const raw = baseUrl && baseUrl.trim().length > 0 ? baseUrl : CODEX_BASE_URL;
-	const normalized = raw.replace(/\/+$/, "");
+	// Split before trimming: a query or fragment may itself end in `/`, and
+	// rewriting that character would corrupt signed parameters or redirect values.
+	const queryStart = raw.search(/[?#]/u);
+	const base = queryStart === -1 ? raw : raw.slice(0, queryStart);
+	const suffix = queryStart === -1 ? "" : raw.slice(queryStart);
+	const trimmedBase = base.replace(/\/+$/u, "");
+	const normalized = `${trimmedBase}${suffix}`;
 	// Match the pathname only. Matching the whole serialized URL would mistake a
 	// host literally named `responses` for an explicit endpoint, and a query
 	// string for part of the path — appending `/codex/responses` there would
 	// corrupt the query instead of reaching an endpoint.
-	const queryStart = normalized.search(/[?#]/u);
-	const base = queryStart === -1 ? normalized : normalized.slice(0, queryStart);
-	const suffix = queryStart === -1 ? "" : normalized.slice(queryStart);
-	const trimmedBase = base.replace(/\/+$/u, "");
 	let pathname = trimmedBase;
 	try {
 		pathname = new URL(base).pathname.replace(/\/+$/u, "");
