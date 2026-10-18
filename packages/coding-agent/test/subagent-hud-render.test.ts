@@ -953,5 +953,4 @@ describe("InteractiveMode subagent observer UI sync", () => {
 		expect(hudText()).not.toContain("Override4");
 		expect(hudText()).toContain("more — expand");
 	});
-
 });

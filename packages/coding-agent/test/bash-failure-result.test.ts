@@ -306,7 +306,10 @@ describe.skipIf(process.platform !== "darwin")("managed bash startup isolation",
 		const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
 		try {
 			await fs.writeFile(startup, `printf bypass > ${quote(marker)}\n`);
-			await fs.writeFile(profile, `(version 1) (allow default) (deny file-write* (subpath ${JSON.stringify(directory)}))`);
+			await fs.writeFile(
+				profile,
+				`(version 1) (allow default) (deny file-write* (subpath ${JSON.stringify(directory)}))`,
+			);
 			process.env.BASH_ENV = startup;
 			process.env.ENV = startup;
 			const session = makeSession();
@@ -318,7 +321,12 @@ describe.skipIf(process.platform !== "darwin")("managed bash startup isolation",
 			});
 			expect(result.isError).toBeUndefined();
 			expect(result.content.find(block => block.type === "text")?.text).toContain("admitted");
-			expect(await fs.access(marker).then(() => true, () => false)).toBe(false);
+			expect(
+				await fs.access(marker).then(
+					() => true,
+					() => false,
+				),
+			).toBe(false);
 		} finally {
 			if (oldBashEnv === undefined) delete process.env.BASH_ENV;
 			else process.env.BASH_ENV = oldBashEnv;
@@ -333,6 +341,8 @@ describe.skipIf(process.platform !== "darwin")("managed bash startup isolation",
 		session.managedHostIsolation = true;
 		const tool = new BashTool(session);
 		await expect(tool.execute("pty", { command: "printf unsafe", pty: true })).rejects.toThrow("service or PTY");
-		await expect(tool.execute("service", { command: "printf unsafe", name: "unsafe" })).rejects.toThrow("service or PTY");
+		await expect(tool.execute("service", { command: "printf unsafe", name: "unsafe" })).rejects.toThrow(
+			"service or PTY",
+		);
 	});
 });

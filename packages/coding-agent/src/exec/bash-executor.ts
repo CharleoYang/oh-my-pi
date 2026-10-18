@@ -525,7 +525,9 @@ async function executeUserShellPty(run: {
 
 async function executeManagedBash(command: string, options: BashExecutorOptions): Promise<BashResult> {
 	if (process.platform !== "darwin") throw new Error("Managed bash isolation requires macOS");
-	const inheritedEnv = Object.fromEntries(Object.entries(Bun.env).filter(([, value]) => value !== undefined)) as Record<string, string>;
+	const inheritedEnv = Object.fromEntries(
+		Object.entries(Bun.env).filter(([, value]) => value !== undefined),
+	) as Record<string, string>;
 	const settings = await Settings.init();
 	const env = buildNonInteractiveEnv({ ...inheritedEnv, ...options.env });
 	// -p also rejects inherited shell functions, SHELLOPTS and BASHOPTS before

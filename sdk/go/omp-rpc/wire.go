@@ -87,6 +87,8 @@ type ThinkingContent struct {
 	Thinking          string  `json:"thinking"`
 	ThinkingSignature *string `json:"thinkingSignature,omitempty"`
 	ItemID            *string `json:"itemId,omitempty"`
+	// Prose the model addressed to the user, returned by the provider as thinking; present it as answer text.
+	Narration *bool `json:"narration,omitempty"`
 	// Extra holds undeclared keys and declared keys whose value did not decode (that field stays zero).
 	// Encoding writes them back, over a declared field with the same key.
 	Extra map[string]json.RawMessage `json:"-"`
@@ -103,6 +105,7 @@ func (v *ThinkingContent) decodeFrom(raw map[string]json.RawMessage) error {
 	d.required("thinking", &out.Thinking)
 	d.optional("thinkingSignature", &out.ThinkingSignature)
 	d.optional("itemId", &out.ItemID)
+	d.optional("narration", &out.Narration)
 	out.Extra = d.rest()
 	if d.err != nil {
 		return d.err
@@ -2287,10 +2290,11 @@ func (v *Goal) decodeFrom(raw map[string]json.RawMessage) error {
 
 // Session goal mode; `mode` is `"exiting"` while a completed goal unwinds.
 type GoalModeState struct {
-	Enabled bool                 `json:"enabled"`
-	Mode    GoalModeStateMode    `json:"mode"`
-	Goal    Goal                 `json:"goal"`
-	Reason  *GoalModeStateReason `json:"reason,omitempty"`
+	Enabled           bool                 `json:"enabled"`
+	Mode              GoalModeStateMode    `json:"mode"`
+	Goal              Goal                 `json:"goal"`
+	Reason            *GoalModeStateReason `json:"reason,omitempty"`
+	ContinuationGuard *string              `json:"continuationGuard,omitempty"`
 }
 
 func (v *GoalModeState) UnmarshalJSON(data []byte) error {
@@ -2304,6 +2308,7 @@ func (v *GoalModeState) decodeFrom(raw map[string]json.RawMessage) error {
 	d.required("mode", &out.Mode)
 	d.required("goal", &out.Goal)
 	d.optional("reason", &out.Reason)
+	d.optional("continuationGuard", &out.ContinuationGuard)
 	if d.err != nil {
 		return d.err
 	}
@@ -3518,7 +3523,10 @@ func (v *NotifyType) UnmarshalJSON(data []byte) error {
 	return unknownValue("NotifyType", s)
 }
 
-type AgentStartEvent struct{}
+type AgentStartEvent struct {
+	// Calls of an unpaired assistant tail a continued run executes before its first model request.
+	ResumedToolCallIds []string `json:"resumedToolCallIds,omitempty"`
+}
 
 func (v *AgentStartEvent) UnmarshalJSON(data []byte) error {
 	return decodeWith(data, "AgentStartEvent", v.decodeFrom)
@@ -3528,6 +3536,7 @@ func (v *AgentStartEvent) decodeFrom(raw map[string]json.RawMessage) error {
 	var out AgentStartEvent
 	d := fieldDecoder{raw: raw, owner: "AgentStartEvent"}
 	d.constant("type", "agent_start")
+	d.optional("resumedToolCallIds", &out.ResumedToolCallIds)
 	if d.err != nil {
 		return d.err
 	}

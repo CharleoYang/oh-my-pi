@@ -216,8 +216,14 @@ class ConcreteExtensionAPI implements ExtensionAPI, IExtensionRuntime {
 	}
 
 	registerGoalGuard(id: string, guard: GoalGuard): void {
-		if (!id.trim() || id !== id.trim() || typeof guard.beforeRun !== "function" || typeof guard.beforeComplete !== "function") throw new Error("Invalid Goal guard registration");
-		const ids = this.runtime.goalGuardIds ??= new Set<string>();
+		if (
+			!id.trim() ||
+			id !== id.trim() ||
+			typeof guard.beforeRun !== "function" ||
+			typeof guard.beforeComplete !== "function"
+		)
+			throw new Error("Invalid Goal guard registration");
+		const ids = (this.runtime.goalGuardIds ??= new Set<string>());
 		if (ids.has(id)) throw new Error(`Duplicate Goal guard: ${id}`);
 		ids.add(id);
 		(this.extension.goalGuards ??= new Map()).set(id, guard);

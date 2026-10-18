@@ -4,7 +4,15 @@ import goalBudgetLimitPrompt from "../prompts/goals/goal-budget-limit.md" with {
 import goalContinuationPrompt from "../prompts/goals/goal-continuation.md" with { type: "text" };
 import goalModeActivePrompt from "../prompts/goals/goal-mode-active.md" with { type: "text" };
 import type { Goal } from "@oh-my-pi/pi-tui/tools/goal";
-import { type GoalBudgetSteering, type GoalControlRequest, type GoalModeState, type GoalRuntimeEvent, type GoalSnapshot, type GoalTokenUsage, goalSnapshot } from "./state";
+import {
+	type GoalBudgetSteering,
+	type GoalControlRequest,
+	type GoalModeState,
+	type GoalRuntimeEvent,
+	type GoalSnapshot,
+	type GoalTokenUsage,
+	goalSnapshot,
+} from "./state";
 
 export interface GoalRuntimeHost {
 	getState(): GoalModeState | undefined;
@@ -138,28 +146,42 @@ export class GoalRuntime {
 	}
 
 	#assertGoal(expectedGoalId?: string): void {
-		if (expectedGoalId !== undefined && this.#host.getState()?.goal.id !== expectedGoalId) throw new Error("Goal identity mismatch");
+		if (expectedGoalId !== undefined && this.#host.getState()?.goal.id !== expectedGoalId)
+			throw new Error("Goal identity mismatch");
 	}
 
 	async control(request: GoalControlRequest): Promise<GoalSnapshot | undefined> {
 		this.#host.assertOutsideGuard?.();
 		const scope = { check: this.#host.captureControlFence?.(request), closed: false };
-		try { return await this.#controlFence.run(scope, () => this.#control(request)); }
-		finally { scope.closed = true; }
+		try {
+			return await this.#controlFence.run(scope, () => this.#control(request));
+		} finally {
+			scope.closed = true;
+		}
 	}
 
 	async #control(request: GoalControlRequest): Promise<GoalSnapshot | undefined> {
 		if (request.op === "create") {
-			if (request.paused !== true || !request.continuationGuard?.trim()) throw new Error("Guarded Goal must be created paused with a guard identity");
+			if (request.paused !== true || !request.continuationGuard?.trim())
+				throw new Error("Guarded Goal must be created paused with a guard identity");
 			await this.createGoal(request);
 		} else {
 			if (!request.expectedGoalId) throw new Error("expectedGoalId is required");
 			switch (request.op) {
-				case "pause": await this.pauseGoal(request.expectedGoalId); break;
-				case "resume": await this.resumeGoal(request.expectedGoalId); break;
-				case "complete": await this.completeGoalFromTool(request.expectedGoalId); break;
-				case "drop": await this.dropGoal(request.expectedGoalId); break;
-				default: throw new Error("Unknown Goal control operation");
+				case "pause":
+					await this.pauseGoal(request.expectedGoalId);
+					break;
+				case "resume":
+					await this.resumeGoal(request.expectedGoalId);
+					break;
+				case "complete":
+					await this.completeGoalFromTool(request.expectedGoalId);
+					break;
+				case "drop":
+					await this.dropGoal(request.expectedGoalId);
+					break;
+				default:
+					throw new Error("Unknown Goal control operation");
 			}
 		}
 		return this.getState();
@@ -437,7 +459,12 @@ export class GoalRuntime {
 		return { enabled: true, mode: "active", goal };
 	}
 
-	async createGoal(input: { objective: string; tokenBudget?: number; continuationGuard?: string; paused?: true }): Promise<GoalModeState> {
+	async createGoal(input: {
+		objective: string;
+		tokenBudget?: number;
+		continuationGuard?: string;
+		paused?: true;
+	}): Promise<GoalModeState> {
 		const objective = input.objective.trim();
 		if (!objective) throw new Error("objective is required when op=create");
 		validateTokenBudget(input.tokenBudget);
@@ -485,8 +512,14 @@ export class GoalRuntime {
 			this.#assertGoal(expectedGoalId);
 			const state = this.#getStateClone();
 			if (!state?.goal) throw new Error("No paused goal.");
-			if (state.continuationGuard && !this.#host.guardAvailable?.(state.continuationGuard)) throw new Error("Goal continuation guard is unavailable");
-			if (state.continuationGuard && state.goal.tokenBudget !== undefined && state.goal.tokensUsed >= state.goal.tokenBudget) throw new Error("Goal token budget is exhausted");
+			if (state.continuationGuard && !this.#host.guardAvailable?.(state.continuationGuard))
+				throw new Error("Goal continuation guard is unavailable");
+			if (
+				state.continuationGuard &&
+				state.goal.tokenBudget !== undefined &&
+				state.goal.tokensUsed >= state.goal.tokenBudget
+			)
+				throw new Error("Goal token budget is exhausted");
 			if (state.goal.status === "complete") throw new Error("Goal is already complete.");
 			state.enabled = true;
 			state.mode = "active";

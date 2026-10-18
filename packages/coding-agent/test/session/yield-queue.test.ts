@@ -161,56 +161,69 @@ describe("YieldQueue", () => {
 		(["all", "kind", "unregister"] as const).flatMap(scope =>
 			(["denied", "allowed", "thrown"] as const).map(admission => ({ scope, admission })),
 		),
-	)("$scope clearing rejects drained receipts without restoring them after $admission admission", async ({ scope, admission }) => {
-		const held = Promise.withResolvers<boolean>();
-		const attempts: AgentMessage[][] = [];
-		const queue = new YieldQueue({
-			isStreaming: () => false,
-			injectIdle: messages => {
-				attempts.push(messages);
-				return held.promise;
-			},
-			scheduleIdleFlush: () => {},
-		});
-		const unregister = queue.register<Entry>("items", {
-			build: entries => userMessage(entries.map(entry => entry.id).join(",")),
-		});
-		queue.register<Entry>("other", {
-			build: entries => userMessage(entries.map(entry => entry.id).join(",")),
-		});
-		let outcome = "pending";
-		let otherOutcome = "pending";
-		const receipt = queue.enqueueWithReceipt("items", { id: "cancelled" }).then(
-			() => { outcome = "delivered"; }, () => { outcome = "rejected"; },
-		);
-		const other = queue.enqueueWithReceipt("other", { id: "unrelated" }).then(
-			() => { otherOutcome = "delivered"; }, () => { otherOutcome = "rejected"; },
-		);
-		const flush = queue.flush("idle");
-		expect(attempts).toHaveLength(1);
-		expect(queue.has()).toBe(false);
-		if (scope === "unregister") unregister();
-		else if (scope === "kind") queue.clear("items");
-		else queue.clear();
-		await Promise.resolve();
-		expect(outcome).toBe("rejected");
-		expect(otherOutcome).toBe(scope === "all" ? "rejected" : "pending");
-		if (admission === "thrown") held.reject(new Error("admission failed"));
-		else held.resolve(admission === "allowed");
-		await flush;
-		await receipt;
-		for (const message of attempts[0]!) {
-			(message as CommittableAsideMessage)[ASIDE_MESSAGE_COMMIT]?.();
-			(message as CommittableAsideMessage)[ASIDE_MESSAGE_DISCARD]?.(new Error("late discard"));
-		}
-		await Promise.resolve();
-		expect(outcome).toBe("rejected");
-		expect(otherOutcome).toBe(scope === "all" ? "rejected" : admission === "allowed" ? "delivered" : "pending");
-		expect(queue.has("items")).toBe(false);
-		expect(queue.has("other")).toBe(scope !== "all" && admission !== "allowed");
-		queue.clear("other");
-		await other;
-	});
+	)(
+		"$scope clearing rejects drained receipts without restoring them after $admission admission",
+		async ({ scope, admission }) => {
+			const held = Promise.withResolvers<boolean>();
+			const attempts: AgentMessage[][] = [];
+			const queue = new YieldQueue({
+				isStreaming: () => false,
+				injectIdle: messages => {
+					attempts.push(messages);
+					return held.promise;
+				},
+				scheduleIdleFlush: () => {},
+			});
+			const unregister = queue.register<Entry>("items", {
+				build: entries => userMessage(entries.map(entry => entry.id).join(",")),
+			});
+			queue.register<Entry>("other", {
+				build: entries => userMessage(entries.map(entry => entry.id).join(",")),
+			});
+			let outcome = "pending";
+			let otherOutcome = "pending";
+			const receipt = queue.enqueueWithReceipt("items", { id: "cancelled" }).then(
+				() => {
+					outcome = "delivered";
+				},
+				() => {
+					outcome = "rejected";
+				},
+			);
+			const other = queue.enqueueWithReceipt("other", { id: "unrelated" }).then(
+				() => {
+					otherOutcome = "delivered";
+				},
+				() => {
+					otherOutcome = "rejected";
+				},
+			);
+			const flush = queue.flush("idle");
+			expect(attempts).toHaveLength(1);
+			expect(queue.has()).toBe(false);
+			if (scope === "unregister") unregister();
+			else if (scope === "kind") queue.clear("items");
+			else queue.clear();
+			await Promise.resolve();
+			expect(outcome).toBe("rejected");
+			expect(otherOutcome).toBe(scope === "all" ? "rejected" : "pending");
+			if (admission === "thrown") held.reject(new Error("admission failed"));
+			else held.resolve(admission === "allowed");
+			await flush;
+			await receipt;
+			for (const message of attempts[0]!) {
+				(message as CommittableAsideMessage)[ASIDE_MESSAGE_COMMIT]?.();
+				(message as CommittableAsideMessage)[ASIDE_MESSAGE_DISCARD]?.(new Error("late discard"));
+			}
+			await Promise.resolve();
+			expect(outcome).toBe("rejected");
+			expect(otherOutcome).toBe(scope === "all" ? "rejected" : admission === "allowed" ? "delivered" : "pending");
+			expect(queue.has("items")).toBe(false);
+			expect(queue.has("other")).toBe(scope !== "all" && admission !== "allowed");
+			queue.clear("other");
+			await other;
+		},
+	);
 
 	test.each(
 		(["all", "kind", "unregister"] as const).flatMap(scope =>
@@ -231,10 +244,20 @@ describe("YieldQueue", () => {
 		let outcome = "pending";
 		let otherOutcome = "pending";
 		const receipt = harness.queue.enqueueWithReceipt("items", { id: "cancelled" }).then(
-			() => { outcome = "delivered"; }, () => { outcome = "rejected"; },
+			() => {
+				outcome = "delivered";
+			},
+			() => {
+				outcome = "rejected";
+			},
 		);
 		const other = harness.queue.enqueueWithReceipt("other", { id: "unrelated" }).then(
-			() => { otherOutcome = "delivered"; }, () => { otherOutcome = "rejected"; },
+			() => {
+				otherOutcome = "delivered";
+			},
+			() => {
+				otherOutcome = "rejected";
+			},
 		);
 		const thunks = harness.queue.drainLazy();
 		expect(thunks).toHaveLength(2);

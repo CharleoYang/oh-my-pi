@@ -69,7 +69,9 @@ export function preparedGoalRunId(
 	const matchingData = (entry: (typeof entries)[number]): Record<string, unknown> | undefined => {
 		if (entry.type !== "custom" || !entry.data || typeof entry.data !== "object") return undefined;
 		const data = entry.data as Record<string, unknown>;
-		return data.goalId === goalId && data.continuationGuard === continuationGuard && data.sessionId === sessionId ? data : undefined;
+		return data.goalId === goalId && data.continuationGuard === continuationGuard && data.sessionId === sessionId
+			? data
+			: undefined;
 	};
 	for (let index = entries.length - 1; index >= 0; index--) {
 		const entry = entries[index];
@@ -82,7 +84,11 @@ export function preparedGoalRunId(
 			if (proof.customType !== "goal-admission-retired" && proof.customType !== "goal-run") continue;
 			const proofData = matchingData(proof);
 			if (!proofData) continue;
-			if (proof.customType === "goal-admission-retired" && (typeof proofData.runId !== "string" || !proofData.runId.trim())) return undefined;
+			if (
+				proof.customType === "goal-admission-retired" &&
+				(typeof proofData.runId !== "string" || !proofData.runId.trim())
+			)
+				return undefined;
 			if (proofData.runId === runId) return undefined;
 		}
 		return runId;

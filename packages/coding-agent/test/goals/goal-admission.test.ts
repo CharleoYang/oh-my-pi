@@ -1,12 +1,30 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
 import { GoalAdmission } from "@oh-my-pi/pi-coding-agent/goals/admission";
 import { GoalRuntime } from "@oh-my-pi/pi-coding-agent/goals/runtime";
-import { type GoalGuard, type GoalGuardContext, type GoalModeState, type GoalRunDecision, type GoalTokenUsage, goalGuardFromModeData, preparedGoalRunId } from "@oh-my-pi/pi-coding-agent/goals/state";
+import {
+	type GoalGuard,
+	type GoalGuardContext,
+	type GoalModeState,
+	type GoalRunDecision,
+	type GoalTokenUsage,
+	goalGuardFromModeData,
+	preparedGoalRunId,
+} from "@oh-my-pi/pi-coding-agent/goals/state";
 
 function harness(guarded = true) {
 	let state: GoalModeState | undefined = {
-		enabled: true, mode: "active", continuationGuard: guarded ? "trusted" : undefined,
-		goal: { id: "g1", objective: "Deliver safely", status: "active", tokensUsed: 0, timeUsedSeconds: 0, createdAt: 0, updatedAt: 0 },
+		enabled: true,
+		mode: "active",
+		continuationGuard: guarded ? "trusted" : undefined,
+		goal: {
+			id: "g1",
+			objective: "Deliver safely",
+			status: "active",
+			tokensUsed: 0,
+			timeUsedSeconds: 0,
+			createdAt: 0,
+			updatedAt: 0,
+		},
 	};
 	let sessionId = "s1";
 	let generation = 0;
@@ -19,10 +37,20 @@ function harness(guarded = true) {
 	};
 	const receipts: GoalGuardContext[] = [];
 	let commitRun: (() => Promise<void>) | undefined;
-	const preparedJournal: Array<{ type: string; customType: string; data: { goalId: string; continuationGuard?: string; sessionId: string; runId: string } }> = [];
-	const identity = (context: GoalGuardContext) => ({ goalId: context.goal.goal.id, continuationGuard: context.goal.continuationGuard, sessionId: context.sessionId, runId: context.runId });
+	const preparedJournal: Array<{
+		type: string;
+		customType: string;
+		data: { goalId: string; continuationGuard?: string; sessionId: string; runId: string };
+	}> = [];
+	const identity = (context: GoalGuardContext) => ({
+		goalId: context.goal.goal.id,
+		continuationGuard: context.goal.continuationGuard,
+		sessionId: context.sessionId,
+		runId: context.runId,
+	});
 	const reasons: string[] = [];
 	const journal: Array<{ mode: string; state?: GoalModeState }> = [];
+	// oxlint-disable-next-line prefer-const -- read by buildRuntime callbacks before assignment
 	let admission: GoalAdmission;
 	const runtime = new GoalRuntime({
 		getState: () => state,
@@ -42,7 +70,8 @@ function harness(guarded = true) {
 			const expectedSession = sessionId;
 			const expectedGeneration = generation;
 			return () => {
-				if (sessionId !== expectedSession || generation !== expectedGeneration) throw new Error("Control session changed");
+				if (sessionId !== expectedSession || generation !== expectedGeneration)
+					throw new Error("Control session changed");
 			};
 		},
 	});
@@ -52,32 +81,84 @@ function harness(guarded = true) {
 		getGeneration: () => generation,
 		getGuard: () => guard,
 		isAvailable: () => idle,
-		pause: async reason => { reasons.push(reason); await runtime.pauseGoal(); },
-		recordRunIntent: async context => { preparedJournal.push({ type: "custom", customType: "goal-run-intent", data: identity(context) }); await commitRun?.(); },
-		recordRun: context => { receipts.push(context); preparedJournal.push({ type: "custom", customType: "goal-run", data: identity(context) }); },
+		pause: async reason => {
+			reasons.push(reason);
+			await runtime.pauseGoal();
+		},
+		recordRunIntent: async context => {
+			preparedJournal.push({ type: "custom", customType: "goal-run-intent", data: identity(context) });
+			await commitRun?.();
+		},
+		recordRun: context => {
+			receipts.push(context);
+			preparedJournal.push({ type: "custom", customType: "goal-run", data: identity(context) });
+		},
 		recordPreparedRun: async context => {
-			if (preparedGoalRunId(preparedJournal, context.goal.goal.id, context.goal.continuationGuard!, context.sessionId) !== context.runId) {
+			if (
+				preparedGoalRunId(
+					preparedJournal,
+					context.goal.goal.id,
+					context.goal.continuationGuard!,
+					context.sessionId,
+				) !== context.runId
+			) {
 				preparedJournal.push({ type: "custom", customType: "goal-admission-prepared", data: identity(context) });
 			}
 		},
 		getPreparedRunId: (goalId, guardId) => preparedGoalRunId(preparedJournal, goalId, guardId, sessionId),
-		retirePreparedRun: (goalId, continuationGuard, sessionId, runId) => { preparedJournal.push({ type: "custom", customType: "goal-admission-retired", data: { goalId, continuationGuard, sessionId, runId } }); },
+		retirePreparedRun: (goalId, continuationGuard, sessionId, runId) => {
+			preparedJournal.push({
+				type: "custom",
+				customType: "goal-admission-retired",
+				data: { goalId, continuationGuard, sessionId, runId },
+			});
+		},
 		getLatestRunId: (goalId, guardId) => {
 			const latest = receipts.at(-1);
-			return latest?.goal.goal.id === goalId && latest.goal.continuationGuard === guardId && latest.sessionId === sessionId ? latest.runId : undefined;
+			return latest?.goal.goal.id === goalId &&
+				latest.goal.continuationGuard === guardId &&
+				latest.sessionId === sessionId
+				? latest.runId
+				: undefined;
 		},
 	});
 	return {
-		admission, runtime, receipts, reasons, journal, preparedJournal,
+		admission,
+		runtime,
+		receipts,
+		reasons,
+		journal,
+		preparedJournal,
 		getState: () => state,
-		setRunCommit: (commit: () => Promise<void>) => { commitRun = commit; },
-		setGuard: (next: GoalGuard | undefined) => { guard = next; },
-		setSession: (next: string) => { sessionId = next; generation++; admission.cancel(); },
-		setGeneration: () => { generation++; },
-		setIdle: (next: boolean) => { idle = next; },
-		setBudget: () => { if (state) { state.goal.tokenBudget = 1; state.goal.tokensUsed = 1; } },
-		setUsage: (next: GoalTokenUsage) => { usage = next; },
-		advance: (seconds: number) => { now += seconds * 1000; },
+		setRunCommit: (commit: () => Promise<void>) => {
+			commitRun = commit;
+		},
+		setGuard: (next: GoalGuard | undefined) => {
+			guard = next;
+		},
+		setSession: (next: string) => {
+			sessionId = next;
+			generation++;
+			admission.cancel();
+		},
+		setGeneration: () => {
+			generation++;
+		},
+		setIdle: (next: boolean) => {
+			idle = next;
+		},
+		setBudget: () => {
+			if (state) {
+				state.goal.tokenBudget = 1;
+				state.goal.tokensUsed = 1;
+			}
+		},
+		setUsage: (next: GoalTokenUsage) => {
+			usage = next;
+		},
+		advance: (seconds: number) => {
+			now += seconds * 1000;
+		},
 	};
 }
 
@@ -99,32 +180,40 @@ describe("native Goal admission", () => {
 		expect(host.getState()?.goal).toMatchObject({ tokensUsed: 7, timeUsedSeconds: 3 });
 	});
 
-	it.each(["session", "generation", "guard", "availability", "abort"] as const)("retains unsubmitted proof when the %s fence closes during intent persistence", async change => {
-		const host = harness();
-		const entered = Promise.withResolvers<void>();
-		const release = Promise.withResolvers<void>();
-		host.setRunCommit(async () => { entered.resolve(); await release.promise; });
-		const run = vi.fn(async () => {});
-		const submitted = host.admission.submit(run);
-		await entered.promise;
-		const parked = preparedGoalRunId(host.preparedJournal, "g1", "trusted", "s1");
-		expect(parked).toEqual(expect.any(String));
-		if (change === "session") host.setSession("s2");
-		else if (change === "generation") host.setGeneration();
-		else if (change === "guard") host.setGuard(undefined);
-		else if (change === "availability") host.setIdle(false);
-		else host.admission.cancel();
-		release.resolve();
-		expect(await submitted).toBe(false);
-		expect(run).not.toHaveBeenCalled();
-		expect(host.receipts).toEqual([]);
-		expect(preparedGoalRunId(host.preparedJournal, "g1", "trusted", "s1")).toBe(parked);
-		await expect(host.admission.beforeComplete()).rejects.toThrow("real matching submitted run");
-	});
+	it.each(["session", "generation", "guard", "availability", "abort"] as const)(
+		"retains unsubmitted proof when the %s fence closes during intent persistence",
+		async change => {
+			const host = harness();
+			const entered = Promise.withResolvers<void>();
+			const release = Promise.withResolvers<void>();
+			host.setRunCommit(async () => {
+				entered.resolve();
+				await release.promise;
+			});
+			const run = vi.fn(async () => {});
+			const submitted = host.admission.submit(run);
+			await entered.promise;
+			const parked = preparedGoalRunId(host.preparedJournal, "g1", "trusted", "s1");
+			expect(parked).toEqual(expect.any(String));
+			if (change === "session") host.setSession("s2");
+			else if (change === "generation") host.setGeneration();
+			else if (change === "guard") host.setGuard(undefined);
+			else if (change === "availability") host.setIdle(false);
+			else host.admission.cancel();
+			release.resolve();
+			expect(await submitted).toBe(false);
+			expect(run).not.toHaveBeenCalled();
+			expect(host.receipts).toEqual([]);
+			expect(preparedGoalRunId(host.preparedJournal, "g1", "trusted", "s1")).toBe(parked);
+			await expect(host.admission.beforeComplete()).rejects.toThrow("real matching submitted run");
+		},
+	);
 
 	it("failed intent persistence creates no submitted proof or completion authority", async () => {
 		const host = harness();
-		host.setRunCommit(async () => { throw new Error("submitted persistence failed"); });
+		host.setRunCommit(async () => {
+			throw new Error("submitted persistence failed");
+		});
 		const run = vi.fn(async () => {});
 		await expect(host.admission.submit(run)).rejects.toThrow("submitted persistence failed");
 		expect(run).not.toHaveBeenCalled();
@@ -135,13 +224,22 @@ describe("native Goal admission", () => {
 	it("guarded paused creation is durable and cannot replace a live or paused Goal", async () => {
 		const host = harness();
 		await host.runtime.dropGoal();
-		const snapshot = await host.runtime.control({ op: "create", objective: "Paused", continuationGuard: "trusted", paused: true });
+		const snapshot = await host.runtime.control({
+			op: "create",
+			objective: "Paused",
+			continuationGuard: "trusted",
+			paused: true,
+		});
 		expect(snapshot).toMatchObject({ enabled: false, continuationGuard: "trusted", goal: { status: "paused" } });
 		expect(Object.isFrozen(snapshot)).toBe(true);
 		expect(Object.isFrozen(snapshot!.goal)).toBe(true);
 		expect(host.journal.at(-1)?.mode).toBe("goal_paused");
-		await expect(host.runtime.control({ op: "create", objective: "Another", continuationGuard: "trusted", paused: true })).rejects.toThrow("already has a goal");
-		await expect(host.runtime.control({ op: "pause", expectedGoalId: "foreign" })).rejects.toThrow("identity mismatch");
+		await expect(
+			host.runtime.control({ op: "create", objective: "Another", continuationGuard: "trusted", paused: true }),
+		).rejects.toThrow("already has a goal");
+		await expect(host.runtime.control({ op: "pause", expectedGoalId: "foreign" })).rejects.toThrow(
+			"identity mismatch",
+		);
 		await host.runtime.control({ op: "resume", expectedGoalId: snapshot!.goal.id });
 		await expect(host.runtime.replaceGoal({ objective: "model rewrite" })).rejects.toThrow("guarded Goal");
 	});
@@ -151,11 +249,17 @@ describe("native Goal admission", () => {
 		const host = harness();
 		const probed = Promise.withResolvers<void>();
 		const contexts: GoalGuardContext[] = [];
-		host.setGuard({ beforeRun: async context => {
-			contexts.push(context);
-			if (contexts.length === 1) { probed.resolve(); return { decision: "wait", retryAt: Date.now() + 1000, reason: "lease pending" }; }
-			return { decision: "allow", additionalContext: "approved" };
-		}, beforeComplete: async () => ({ decision: "allow" }) });
+		host.setGuard({
+			beforeRun: async context => {
+				contexts.push(context);
+				if (contexts.length === 1) {
+					probed.resolve();
+					return { decision: "wait", retryAt: Date.now() + 1000, reason: "lease pending" };
+				}
+				return { decision: "allow", additionalContext: "approved" };
+			},
+			beforeComplete: async () => ({ decision: "allow" }),
+		});
 		const submit = vi.fn(async () => {});
 		const pending = host.admission.submit(submit);
 		await probed.promise;
@@ -176,7 +280,13 @@ describe("native Goal admission", () => {
 		const host = harness();
 		const entered = Promise.withResolvers<GoalGuardContext>();
 		const decision = Promise.withResolvers<GoalRunDecision>();
-		host.setGuard({ beforeRun: async context => { entered.resolve(context); return decision.promise; }, beforeComplete: async () => ({ decision: "allow" }) });
+		host.setGuard({
+			beforeRun: async context => {
+				entered.resolve(context);
+				return decision.promise;
+			},
+			beforeComplete: async () => ({ decision: "allow" }),
+		});
 		const submit = vi.fn(async () => {});
 		const pending = host.admission.submit(submit);
 		const context = await entered.promise;
@@ -189,42 +299,61 @@ describe("native Goal admission", () => {
 		expect(host.receipts).toHaveLength(0);
 	});
 
-	it.each(["session", "generation", "idle", "budget", "handler"])("fences a late allow when %s changes", async change => {
-		const host = harness();
-		const entered = Promise.withResolvers<void>();
-		const decision = Promise.withResolvers<GoalRunDecision>();
-		host.setGuard({ beforeRun: async () => { entered.resolve(); return decision.promise; }, beforeComplete: async () => ({ decision: "allow" }) });
-		const submit = vi.fn(async () => {});
-		const pending = host.admission.submit(submit);
-		await entered.promise;
-		if (change === "session") host.setSession("s2");
-		if (change === "generation") host.setGeneration();
-		if (change === "idle") host.setIdle(false);
-		if (change === "budget") host.setBudget();
-		if (change === "handler") host.setGuard(undefined);
-		decision.resolve({ decision: "allow", additionalContext: "late" });
-		expect(await pending).toBe(false);
-		expect(submit).not.toHaveBeenCalled();
-		expect(host.receipts).toHaveLength(0);
-	});
+	it.each(["session", "generation", "idle", "budget", "handler"])(
+		"fences a late allow when %s changes",
+		async change => {
+			const host = harness();
+			const entered = Promise.withResolvers<void>();
+			const decision = Promise.withResolvers<GoalRunDecision>();
+			host.setGuard({
+				beforeRun: async () => {
+					entered.resolve();
+					return decision.promise;
+				},
+				beforeComplete: async () => ({ decision: "allow" }),
+			});
+			const submit = vi.fn(async () => {});
+			const pending = host.admission.submit(submit);
+			await entered.promise;
+			if (change === "session") host.setSession("s2");
+			if (change === "generation") host.setGeneration();
+			if (change === "idle") host.setIdle(false);
+			if (change === "budget") host.setBudget();
+			if (change === "handler") host.setGuard(undefined);
+			decision.resolve({ decision: "allow", additionalContext: "late" });
+			expect(await pending).toBe(false);
+			expect(submit).not.toHaveBeenCalled();
+			expect(host.receipts).toHaveLength(0);
+		},
+	);
 
-	it.each(["pause", "block"] as const)("%s persists paused without model work or fabricated run identity", async decision => {
-		const host = harness();
-		host.setGuard({ beforeRun: async () => ({ decision, reason: "authority unavailable" }), beforeComplete: async () => ({ decision: "allow" }) });
-		const submit = vi.fn(async () => {});
-		expect(await host.admission.submit(submit)).toBe(false);
-		expect(host.getState()?.goal.status).toBe("paused");
-		expect(host.reasons).toEqual(["authority unavailable"]);
-		expect(host.journal.at(-1)?.mode).toBe("goal_paused");
-		expect(submit).not.toHaveBeenCalled();
-		expect(host.receipts).toHaveLength(0);
-	});
+	it.each(["pause", "block"] as const)(
+		"%s persists paused without model work or fabricated run identity",
+		async decision => {
+			const host = harness();
+			host.setGuard({
+				beforeRun: async () => ({ decision, reason: "authority unavailable" }),
+				beforeComplete: async () => ({ decision: "allow" }),
+			});
+			const submit = vi.fn(async () => {});
+			expect(await host.admission.submit(submit)).toBe(false);
+			expect(host.getState()?.goal.status).toBe("paused");
+			expect(host.reasons).toEqual(["authority unavailable"]);
+			expect(host.journal.at(-1)?.mode).toBe("goal_paused");
+			expect(submit).not.toHaveBeenCalled();
+			expect(host.receipts).toHaveLength(0);
+		},
+	);
 
 	it("missing guard restoration blocks immediately instead of becoming an ordinary Goal", async () => {
 		const host = harness();
 		host.setGuard(undefined);
 		await host.runtime.onThreadResumed({ preserveActiveGoal: true });
-		expect(host.getState()).toMatchObject({ enabled: false, continuationGuard: "trusted", goal: { status: "paused" } });
+		expect(host.getState()).toMatchObject({
+			enabled: false,
+			continuationGuard: "trusted",
+			goal: { status: "paused" },
+		});
 		expect(goalGuardFromModeData({ continuationGuard: "trusted" })).toBe("trusted");
 		expect(() => goalGuardFromModeData({ continuationGuard: 42 })).toThrow("persisted Goal");
 	});
@@ -232,10 +361,15 @@ describe("native Goal admission", () => {
 	it("completion cannot invent a run and control from a guard is rejected without deadlocking", async () => {
 		const host = harness();
 		await expect(host.runtime.completeGoalFromTool()).rejects.toThrow("real matching submitted run");
-		host.setGuard({ beforeRun: async () => {
-			await expect(host.runtime.control({ op: "pause", expectedGoalId: "g1" })).rejects.toThrow("control inside a guard");
-			return { decision: "allow", additionalContext: "allowed" };
-		}, beforeComplete: async () => ({ decision: "block", reason: "original Turn unsettled" }) });
+		host.setGuard({
+			beforeRun: async () => {
+				await expect(host.runtime.control({ op: "pause", expectedGoalId: "g1" })).rejects.toThrow(
+					"control inside a guard",
+				);
+				return { decision: "allow", additionalContext: "allowed" };
+			},
+			beforeComplete: async () => ({ decision: "block", reason: "original Turn unsettled" }),
+		});
 		await host.admission.submit(async () => {});
 		await expect(host.runtime.completeGoalFromTool()).rejects.toThrow("original Turn unsettled");
 		expect(host.getState()?.goal.status).toBe("active");
@@ -243,10 +377,20 @@ describe("native Goal admission", () => {
 
 	it("trusted resumeRunId reuses only the latest real same-session receipt and completion sees the effective id", async () => {
 		const host = harness();
+		// oxlint-disable-next-line prefer-const -- captured by the guard closure before assignment
 		let resumeRunId: string | undefined;
 		const candidates: string[] = [];
 		let completed: string | undefined;
-		host.setGuard({ beforeRun: async context => { candidates.push(context.runId); return { decision: "allow", additionalContext: "original settlement", resumeRunId }; }, beforeComplete: async context => { completed = context.runId; return { decision: "allow" }; } });
+		host.setGuard({
+			beforeRun: async context => {
+				candidates.push(context.runId);
+				return { decision: "allow", additionalContext: "original settlement", resumeRunId };
+			},
+			beforeComplete: async context => {
+				completed = context.runId;
+				return { decision: "allow" };
+			},
+		});
 		await host.admission.submit(async () => {});
 		resumeRunId = host.receipts[0].runId;
 		await host.admission.submit(async () => {});
@@ -266,7 +410,10 @@ describe("native Goal admission", () => {
 
 	it("foreign or non-journaled resumeRunId is rejected before real work", async () => {
 		const host = harness();
-		host.setGuard({ beforeRun: async () => ({ decision: "allow", additionalContext: "forged", resumeRunId: "not-submitted" }), beforeComplete: async () => ({ decision: "allow" }) });
+		host.setGuard({
+			beforeRun: async () => ({ decision: "allow", additionalContext: "forged", resumeRunId: "not-submitted" }),
+			beforeComplete: async () => ({ decision: "allow" }),
+		});
 		const submit = vi.fn(async () => {});
 		await expect(host.admission.submit(submit)).rejects.toThrow("latest submitted run");
 		expect(submit).not.toHaveBeenCalled();
@@ -276,7 +423,11 @@ describe("native Goal admission", () => {
 	it("native internal continuation retains the real submitted identity", async () => {
 		const host = harness();
 		await host.admission.submit(async () => {});
-		await host.admission.submit(async () => {}, () => true, true);
+		await host.admission.submit(
+			async () => {},
+			() => true,
+			true,
+		);
 		expect(host.receipts[1].runId).toBe(host.receipts[0].runId);
 	});
 
@@ -302,10 +453,18 @@ describe("native Goal admission", () => {
 		if (change === "foreign-session") host.setSession("s2");
 		else {
 			await host.runtime.dropGoal();
-			const goal = await host.runtime.control({ op: "create", objective: "Other Goal", continuationGuard: "trusted", paused: true });
+			const goal = await host.runtime.control({
+				op: "create",
+				objective: "Other Goal",
+				continuationGuard: "trusted",
+				paused: true,
+			});
 			await host.runtime.control({ op: "resume", expectedGoalId: goal!.goal.id });
 		}
-		host.setGuard({ beforeRun: async () => ({ decision: "allow", additionalContext: "foreign", resumeRunId: original }), beforeComplete: async () => ({ decision: "allow" }) });
+		host.setGuard({
+			beforeRun: async () => ({ decision: "allow", additionalContext: "foreign", resumeRunId: original }),
+			beforeComplete: async () => ({ decision: "allow" }),
+		});
 		const submit = vi.fn(async () => {});
 		await expect(host.admission.submit(submit)).rejects.toThrow("latest submitted run");
 		expect(submit).not.toHaveBeenCalled();
@@ -321,7 +480,10 @@ describe("native Goal admission", () => {
 	});
 	it("malformed guard output is an explicit paused protocol failure, never a silent success", async () => {
 		const host = harness();
-		host.setGuard({ beforeRun: async () => undefined as unknown as GoalRunDecision, beforeComplete: async () => ({ decision: "allow" }) });
+		host.setGuard({
+			beforeRun: async () => undefined as unknown as GoalRunDecision,
+			beforeComplete: async () => ({ decision: "allow" }),
+		});
 		const submit = vi.fn(async () => {});
 		await expect(host.admission.submit(submit)).rejects.toThrow("returned no decision");
 		expect(host.getState()?.goal.status).toBe("paused");
