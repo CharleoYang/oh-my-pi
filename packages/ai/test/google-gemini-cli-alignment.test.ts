@@ -249,7 +249,6 @@ describe("Google Gemini CLI alignment", () => {
 				labels?: Record<string, string>;
 				systemInstruction?: { role?: string };
 			};
-			requestType?: string;
 			userAgent?: string;
 			requestId?: string;
 		};
@@ -270,6 +269,12 @@ describe("Google Gemini CLI alignment", () => {
 		expect(labels?.last_step_index).toBe("1");
 		expect(labels?.used_claude).toBe("false");
 		expect(labels?.used_claude_conservative).toBe("false");
+	});
+
+	it("does not tag Antigravity chat requests with the requestType that draws false 429 quota errors", () => {
+		const model = createModel("google-antigravity");
+		const payload = buildRequest(model, createContext(), "proj-123", {}, true);
+		expect(payload !== null && typeof payload === "object" && "requestType" in payload).toBe(false);
 	});
 
 	it("stamps the antigravity wire profile (maxOutputTokens + model_enum) by routed wire id", () => {
