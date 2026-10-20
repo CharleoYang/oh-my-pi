@@ -3,7 +3,8 @@ import type { AssistantMessage } from "@oh-my-pi/pi-ai";
 import { AssistantMessageComponent } from "@oh-my-pi/pi-tui/chat/assistant-message";
 import { ReadToolGroupComponent } from "@oh-my-pi/pi-tui/chat/read-tool-group";
 import { chatTranscriptDisplayPreferences } from "@oh-my-pi/pi-tui/chat/display-preferences";
-import { FocusSummaryComponent, formatFocusSummary } from "@oh-my-pi/pi-tui/chat/focus-summary";
+import { FocusSummaryComponent, formatFocusSummary, isFocusExpandable } from "@oh-my-pi/pi-tui/chat/focus-summary";
+import { buildIrcMessageCard } from "@oh-my-pi/pi-tui/chat/transcript-render-helpers";
 import { initTheme } from "@oh-my-pi/pi-tui/theme";
 
 const WIDTH = 80;
@@ -79,6 +80,25 @@ describe("focus mode tool folding", () => {
 		expect(group.render(80)).toEqual([]);
 		group.setFocusExpanded(true);
 		expect(group.render(80)).toEqual([]);
+	});
+
+	it("folds IRC traffic cards until the turn's summary expands them", () => {
+		const card = buildIrcMessageCard(
+			{
+				role: "custom",
+				customType: "irc:incoming",
+				details: { from: "CoreRouterStatic", message: "Router API update" },
+				timestamp: Date.now(),
+				display: true,
+			} as never,
+			() => false,
+		);
+		chatTranscriptDisplayPreferences.focusMode = true;
+
+		expect(card.render(120)).toEqual([]);
+		expect(isFocusExpandable(card)).toBe(true);
+		if (isFocusExpandable(card)) card.setFocusExpanded(true);
+		expect(Bun.stripANSI(card.render(120).join("\n"))).toContain("CoreRouterStatic");
 	});
 });
 

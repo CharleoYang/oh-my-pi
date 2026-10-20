@@ -15,6 +15,7 @@ import { formatArtifactErrorNotice, type OutputMeta } from "../tools/output-meta
 import { replaceTabs, TRUNCATE_LENGTHS, truncateToWidth } from "../render/render-utils";
 import { canonicalizeMessage } from "./thinking-display";
 import { ToolActivityContainer } from "../chrome/tool-activity";
+import { FocusFoldable } from "./focus-foldable";
 import { type TranscriptBlock } from "../chrome/transcript-container";
 import { TranscriptStatusBlock, type TranscriptStatusRow } from "../chrome/transcript-status";
 import { theme } from "../theme";
@@ -135,19 +136,21 @@ export function buildIrcMessageCard(message: CustomOrHookMessage, getExpanded: (
 				: message.customType === "irc:workpool"
 					? ("workpool" as const)
 					: ("relay" as const);
-	return createIrcMessageCard(
-		{
-			kind,
-			from: details?.from,
-			to: details?.to,
-			body: kind === "incoming" ? details?.message : details?.body,
-			replyTo: details?.replyTo,
-			timestamp: message.timestamp,
-			pool: details?.pool,
-			mode: details?.mode,
-		},
-		getExpanded,
-		theme,
+	return new FocusFoldable(
+		createIrcMessageCard(
+			{
+				kind,
+				from: details?.from,
+				to: details?.to,
+				body: kind === "incoming" ? details?.message : details?.body,
+				replyTo: details?.replyTo,
+				timestamp: message.timestamp,
+				pool: details?.pool,
+				mode: details?.mode,
+			},
+			getExpanded,
+			theme,
+		),
 	);
 }
 
