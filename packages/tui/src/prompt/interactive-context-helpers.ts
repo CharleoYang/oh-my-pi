@@ -21,6 +21,8 @@ export interface AssistantMessageHost {
 	/** Whether the viewed session's tables get charts: the main session's do, a focused subagent's do not. */
 	readonly tableChartsVisible: boolean;
 	readonly hideToolActivity: boolean;
+	/** Claude Code-style focus mode: withhold mid-stream publication so interim answers can be hidden once finalized. */
+	readonly focusMode: boolean;
 	readonly toolOutputExpanded: boolean;
 	readonly ui: { requestRender(): void; readonly imageBudget: ImageBudget };
 	/** Resolve already-extracted Markdown link destinations to local targets. */
@@ -128,13 +130,13 @@ export function createAssistantMessageComponent(
 	);
 	component.setImagesVisible(ctx.assistantImagesVisible);
 	component.setTableChartsVisible(ctx.tableChartsVisible);
-	component.setToolResultImagesVisible(!ctx.hideToolActivity);
+	component.setToolResultImagesVisible(!ctx.hideToolActivity && !ctx.focusMode);
 	component.setExpanded(ctx.toolOutputExpanded);
 	// A wire the `stream-revision` axis marks `possible` can rewrite text it has
 	// already streamed; published rows are unrecoverable once they reach native
 	// scrollback, so those wires keep finished lines in the live viewport.
 	const compat = ctx.viewSession.model?.compat;
 	const wireRevisable = compat !== undefined && "streamRevision" in compat && compat.streamRevision === "possible";
-	component.setMidStreamPublication(!wireRevisable);
+	component.setMidStreamPublication(!wireRevisable && !ctx.focusMode);
 	return component;
 }

@@ -20,6 +20,7 @@ import { InternalUrlRouter, resolveLocalRoot } from "../../internal-urls";
 import { ApprovalDialogComponent } from "@oh-my-pi/pi-tui/overlays/approval-dialog";
 import { AskDialogComponent } from "@oh-my-pi/pi-tui/overlays/ask-dialog";
 import { AssistantMessageComponent } from "@oh-my-pi/pi-tui/chat/assistant-message";
+import { FocusSummaryComponent } from "@oh-my-pi/pi-tui/chat/focus-summary";
 import { extractImagePathFromText } from "@oh-my-pi/pi-tui/prompt/custom-editor";
 import { HistorySearchComponent } from "@oh-my-pi/pi-tui/overlays/history-search";
 import { HookEditorComponent } from "@oh-my-pi/pi-tui/overlays/hook-editor";
@@ -784,8 +785,18 @@ export class InputController {
 		const event = parseSgrMouse(data);
 		if (!event) return undefined;
 		if (event.motion) this.#updateHoverHighlight(event.row);
-		else if (event.leftClick) this.#focusClickedAgent(event.row);
+		else if (event.leftClick) this.#activateClickedTarget(event.row);
 		return { consume: true };
+	}
+
+	/** A left click first runs an in-place transcript action, then falls back to agent focus. */
+	#activateClickedTarget(screenRow: number): void {
+		const viewport = this.ctx.ui.getMutableViewport();
+		const local = screenRow - viewport.top;
+		if (viewport.length > 0 && local >= 0 && local < viewport.length && this.ctx.activateViewportClick(local)) {
+			return;
+		}
+		this.#focusClickedAgent(screenRow);
 	}
 
 	/**
@@ -2723,9 +2734,23 @@ export class InputController {
 	}
 
 	toggleToolOutputExpansion(): void {
-		if (this.ctx.hideToolActivity) {
+		if (this.ctx.focusMode) {
+			const latest = this.ctx.chatContainer.children.findLast(
+				(child): child is FocusSummaryComponent => child instanceof FocusSummaryComponent,
+			);
+			if (latest) {
+				latest.toggle();
+				this.ctx.showStatus(latest.expanded ? "Folded work expanded" : "Folded work collapsed");
+				return;
+			}
+		}
+		if (this.ctx.effectiveHideToolActivity) {
 			const visibilityKey = appKey(this.ctx.keybindings, "app.tools.toggleVisibility");
-			const visibilityHint = visibilityKey ? `${visibilityKey} or /settings` : "/settings";
+			const visibilityHint = this.ctx.focusMode
+				? "turn off focus mode with /focus"
+				: visibilityKey
+					? `${visibilityKey} or /settings`
+					: "/settings";
 			this.ctx.showStatus(`Tool activity is hidden — show it with ${visibilityHint} before expanding`);
 			return;
 		}
@@ -2734,6 +2759,10 @@ export class InputController {
 	}
 
 	toggleToolActivityVisibility(): void {
+		if (this.ctx.focusMode) {
+			this.ctx.showStatus("Focus mode is on — exit it with /focus to show tool activity");
+			return;
+		}
 		this.ctx.hideToolActivity = !this.ctx.hideToolActivity;
 		cfgDisplayHideToolActivity.set(this.ctx.settings, this.ctx.hideToolActivity);
 

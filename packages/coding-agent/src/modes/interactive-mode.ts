@@ -341,6 +341,8 @@ import type {
 } from "./types";
 import type { TodoItem, TodoPhase } from "@oh-my-pi/pi-tui/tools/todo";
 import { materializeImageChipLinks, UiHelpers } from "./utils/ui-helpers";
+import { applyFocusModeToTranscript } from "./utils/focus-mode";
+import { setChatTranscriptDisplayPreferences } from "@oh-my-pi/pi-tui/chat/display-preferences";
 
 import {
 	askTimeoutMs,
@@ -350,6 +352,7 @@ import {
 	cfgComposerTokenRate,
 	cfgDisplayCacheMissMarker,
 	cfgDisplayCollapseCompacted,
+	cfgDisplayFocusMode,
 	cfgDisplayHideToolActivity,
 	cfgDisplayPinnedAgents,
 	cfgDisplayShowTokenUsage,
@@ -445,6 +448,7 @@ const cfgLiveUiSettings = combine({
 	"compaction.enabled": cfgCompactionEnabled,
 	"compaction.methodOrder": cfgCompactionMethodOrder,
 	"display.hideToolActivity": cfgDisplayHideToolActivity,
+	"display.focusMode": cfgDisplayFocusMode,
 	"terminal.showImages": cfgTerminalShowImages,
 	"terminal.programStatus": cfgTerminalProgramStatus,
 	hideThinkingBlock: cfgHideThinkingBlock,
@@ -1278,6 +1282,8 @@ export class InteractiveMode implements InteractiveModeContext {
 	isBashMode = false;
 	toolOutputExpanded = false;
 	hideToolActivity = false;
+	/** Claude Code-style focus mode: hide tools, thinking, and interim answers. */
+	focusMode = false;
 	todoExpanded = false;
 	planModeEnabled = false;
 	planModePaused = false;
@@ -1335,15 +1341,20 @@ export class InteractiveMode implements InteractiveModeContext {
 		return true;
 	}
 	/**
-	 * Effective thinking-block visibility: hidden when the user's setting is on,
-	 * or while thinking is "off" before the session has actually produced
+	 * Effective thinking-block visibility: hidden by focus mode or the user's
+	 * setting, or while thinking is "off" before the session has actually produced
 	 * displayable thinking content. Some providers return thinking blocks without
 	 * advertising reasoning support, so observed content unlocks the visibility
 	 * toggle.
 	 */
 	get effectiveHideThinkingBlock(): boolean {
 		const thinkingOff = (this.viewSession?.thinkingLevel ?? ThinkingLevel.Off) === ThinkingLevel.Off;
-		return this.hideThinkingBlock || (thinkingOff && !this.hasDisplayableThinkingContent);
+		return this.focusMode || this.hideThinkingBlock || (thinkingOff && !this.hasDisplayableThinkingContent);
+	}
+
+	/** Tool activity is hidden by the user's display setting or by focus mode. */
+	get effectiveHideToolActivity(): boolean {
+		return this.focusMode || this.hideToolActivity;
 	}
 	proseOnlyThinking = true;
 	expandThinkingBlocks = false;
@@ -1716,6 +1727,11 @@ export class InteractiveMode implements InteractiveModeContext {
 		return this.composer.viewportClickCandidates(index);
 	}
 
+	/** Run an in-place transcript click action (focus summary expand/fold). */
+	activateViewportClick(index: number): boolean {
+		return this.composer.viewportClickActivation(index);
+	}
+
 	/** Flip the pinned jump list between its collapsed few and the full list, overriding the setting. */
 	togglePinnedHudExpanded(): void {
 		const mode = cfgDisplayPinnedAgents.get(settings);
@@ -2031,7 +2047,11 @@ export class InteractiveMode implements InteractiveModeContext {
 		);
 
 		this.hideToolActivity = cfgDisplayHideToolActivity.get(settings);
-		this.chatContainer.setToolActivityVisible(!this.hideToolActivity);
+		this.focusMode = cfgDisplayFocusMode.get(settings);
+		// The renderer reads the process-wide flag; the settings effect also sets
+		// it, but startup must not depend on effect order.
+		setChatTranscriptDisplayPreferences({ focusMode: this.focusMode });
+		this.chatContainer.setToolActivityVisible(!this.effectiveHideToolActivity);
 		this.hideThinkingBlock = cfgHideThinkingBlock.get(settings);
 		this.proseOnlyThinking = cfgProseOnlyThinking.get(settings);
 		this.expandThinkingBlocks = cfgExpandThinkingBlocks.get(settings);
@@ -3663,12 +3683,31 @@ export class InteractiveMode implements InteractiveModeContext {
 				) {
 					child.setExpanded(false);
 				} else if (child instanceof AssistantMessageComponent) {
-					child.setToolResultImagesVisible(!hideToolActivity);
+					child.setToolResultImagesVisible(!this.effectiveHideToolActivity);
 				}
 			}
-			this.chatContainer.setToolActivityVisible(!hideToolActivity);
+			this.chatContainer.setToolActivityVisible(!this.effectiveHideToolActivity);
 			if (hideToolActivity) this.ui.clearInlineImages();
 			// Visibility changes must rebuild retired terminal history.
+			resetDisplay = true;
+		}
+		const focusMode = cfgDisplayFocusMode.get(this.settings);
+		if (any("display.focusMode") && focusMode !== this.focusMode) {
+			this.focusMode = focusMode;
+			// Replay the committed transcript so interim answers are tagged and
+			// activity summaries are regenerated for the new mode.
+			this.rebuildChatFromMessages();
+			this.chatContainer.setToolActivityVisible(!this.effectiveHideToolActivity);
+			const streaming = this.streamingComponent;
+			if (streaming && this.streamingMessage) {
+				streaming.setHideThinkingBlock(this.effectiveHideThinkingBlock);
+				if (focusMode && this.streamingMessage.content.some(content => content.type === "toolCall")) {
+					streaming.setFocusInterim(true);
+				}
+			}
+			if (focusMode) this.ui.clearInlineImages();
+			this.chatContainer.resetStableEmission();
+			// Hidden answers and summaries were already retired to terminal history.
 			resetDisplay = true;
 		}
 		if (any("terminal.showImages")) {
@@ -4107,6 +4146,13 @@ export class InteractiveMode implements InteractiveModeContext {
 		});
 		for (const child of liveComponents) {
 			this.chatContainer.addChild(child);
+		}
+		if (this.focusMode) {
+			applyFocusModeToTranscript(this.chatContainer, this.transcriptMessageComponents, context.messages, () => {
+				// Expanded rows may already sit in terminal history; rebuild it.
+				this.chatContainer.resetStableEmission();
+				this.ui.resetDisplay();
+			});
 		}
 		// `renderSessionContext` clears `pendingTools` at start AND end so the
 		// reconstructed historical tool components don't leak into live tracking.

@@ -207,6 +207,7 @@ export function createInteractiveModeContext(overrides: ContextOverrides = {}): 
 	const chatContainer = new TranscriptContainer();
 	const ui = {
 		requestRender: vi.fn(),
+		resetDisplay: vi.fn(),
 		requestComponentRender: vi.fn(),
 		setFocus: vi.fn(),
 		terminal: { setProgress: vi.fn() },

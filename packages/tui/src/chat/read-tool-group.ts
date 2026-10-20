@@ -3,6 +3,7 @@ import { pathToFileURL } from "node:url";
 import type { AssistantMessage, Usage } from "@oh-my-pi/pi-ai";
 import { type Component } from "../tui";
 import { Container } from "../tui";
+import { chatTranscriptDisplayPreferences } from "./display-preferences";
 import { Text } from "../components/text";
 import { getLanguageFromPath, theme } from "../theme";
 import { parseLineRanges, selectorLineRanges } from "../tools/line-ranges";
@@ -367,6 +368,8 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 	#text: Text;
 	#expanded = false;
 	#toolActivityVisible = true;
+	/** Focus mode folds this group; its turn's summary can expand it again. */
+	#focusExpanded = false;
 	#showContentPreview: boolean;
 	// A read group accretes entries across multiple assistant completions for as
 	// long as the run of reads is uninterrupted. It remains active while its
@@ -396,10 +399,12 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 	}
 
 	override render(width: number): readonly string[] {
-		if (!this.#toolActivityVisible) return [];
+		if (chatTranscriptDisplayPreferences.focusMode ? !this.#focusExpanded : !this.#toolActivityVisible) return [];
 		return super.render(width);
 	}
 	isTranscriptBlockFinalized(): boolean {
+		const hidden = chatTranscriptDisplayPreferences.focusMode ? !this.#focusExpanded : !this.#toolActivityVisible;
+		if (hidden) return true;
 		if (this.#sealed) return true;
 		if (!this.#finalized) return false;
 		// Closed to new entries, but a still-pending entry means its result is in
@@ -576,6 +581,13 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 		super.invalidate();
 	}
 
+	/** Show this group even though focus mode folds the turn it belongs to. */
+	setFocusExpanded(expanded: boolean): void {
+		if (this.#focusExpanded === expanded) return;
+		this.#focusExpanded = expanded;
+		super.invalidate();
+	}
+
 	getComponent(): Component {
 		return this;
 	}
@@ -607,9 +619,11 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 	 */
 	override describe(cx?: DescribeContext): NativeNode {
 		const dataFirst = cx?.supports("tool") === true;
-		const key = [dataFirst, this.#displayVersion, this.#toolActivityVisible, this.#sealed];
+		const foldedByFocus = chatTranscriptDisplayPreferences.focusMode && !this.#focusExpanded;
+		const hiddenByActivity = !chatTranscriptDisplayPreferences.focusMode && !this.#toolActivityVisible;
+		const key = [dataFirst, this.#displayVersion, this.#toolActivityVisible, this.#sealed, foldedByFocus];
 		return this.#native.get(key, () =>
-			withHidden(dataFirst ? this.#describeTool() : this.#describeGroup(), !this.#toolActivityVisible),
+			withHidden(dataFirst ? this.#describeTool() : this.#describeGroup(), foldedByFocus || hiddenByActivity),
 		);
 	}
 

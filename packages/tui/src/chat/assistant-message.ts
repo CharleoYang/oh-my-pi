@@ -30,6 +30,7 @@ import { EMPTY_LINK_TARGETS, resolveImageOptions } from "../render/render-utils"
 import { WidthAwareText } from "../render";
 import { cachedPngConversion, convertImageToPngShared, imagePayloadKey } from "./image-loading";
 import { canonicalizeMessage, formatThinkingForDisplay, hasDisplayableThinking } from "./thinking-display";
+import { chatTranscriptDisplayPreferences } from "./display-preferences";
 import { resolveAssistantErrorPresentation } from "./transcript-render-helpers";
 import { type CacheInvalidation, CacheInvalidationMarkerComponent } from "./cache-invalidation-marker";
 import { formatErrorBlock } from "../chrome/error-block";
@@ -524,6 +525,14 @@ export class AssistantMessageComponent extends Container {
 		return { ...message, content };
 	}
 	#hideThinkingBlock: boolean;
+	/**
+	 * True while this answer is intermediate work inside a turn (it carries tool
+	 * calls, or a later answer superseded it). Focus mode hides tagged answers;
+	 * the flag survives toggling so turning focus off restores them.
+	 */
+	#focusInterim = false;
+	/** User expanded this turn's folded work from its focus summary. */
+	#focusExpanded = false;
 	readonly #onImageUpdate?: () => void;
 	readonly #thinkingRenderers: readonly AssistantThinkingRenderer[];
 	readonly #imageBudget?: ImageBudget;
@@ -626,6 +635,26 @@ export class AssistantMessageComponent extends Container {
 		this.#thinkingCollapsed.clear();
 	}
 
+	/** Tag this answer as intermediate work hidden by focus mode. */
+	setFocusInterim(interim: boolean): void {
+		if (this.#focusInterim === interim) return;
+		this.#focusInterim = interim;
+		this.#nativeViewVersion++;
+		this.invalidate();
+	}
+
+	get focusInterim(): boolean {
+		return this.#focusInterim;
+	}
+
+	/** Show this interim answer even though focus mode folds it. */
+	setFocusExpanded(expanded: boolean): void {
+		if (this.#focusExpanded === expanded) return;
+		this.#focusExpanded = expanded;
+		this.#nativeViewVersion++;
+		this.invalidate();
+	}
+
 	/**
 	 * Allow or withhold retiring finished lines into native scrollback while the
 	 * turn is still streaming. Wires the `stream-revision` axis marks as able to
@@ -666,6 +695,7 @@ export class AssistantMessageComponent extends Container {
 	 * Once text starts, a tool call streams, or the block is sealed, the pulse ends.
 	 */
 	#shouldAnimateThinking(message: AssistantMessage): boolean {
+		if (chatTranscriptDisplayPreferences.focusMode) return false;
 		return this.#hideThinkingBlock && this.#thinkingTailIndex(message) !== undefined;
 	}
 
@@ -799,6 +829,7 @@ export class AssistantMessageComponent extends Container {
 	}
 
 	override render(width: number): readonly string[] {
+		if (this.#focusInterim && chatTranscriptDisplayPreferences.focusMode && !this.#focusExpanded) return [];
 		const rows = super.render(width);
 		this.#publishStableSnapshot(rows, width);
 		return rows;
@@ -831,8 +862,13 @@ export class AssistantMessageComponent extends Container {
 			rate,
 			media,
 			getThemeEpoch(),
+			this.#focusInterim,
+			this.#focusExpanded,
+			chatTranscriptDisplayPreferences.focusMode,
 		];
-		return this.#native.get(key, () => this.#describeMessage(tail, rate, media));
+		const node = this.#native.get(key, () => this.#describeMessage(tail, rate, media));
+		if (!this.#focusInterim || this.#focusExpanded || !chatTranscriptDisplayPreferences.focusMode) return node;
+		return col([node], { role: "omp.assistant", hidden: true });
 	}
 
 	/**
@@ -934,6 +970,7 @@ export class AssistantMessageComponent extends Container {
 						else if (chart) children.push(markdown(slot, slot, chartFence(chart), false));
 					});
 				} else if (content.type === "thinking") {
+					if (chatTranscriptDisplayPreferences.focusMode) continue;
 					const display = resolveThinkingDisplay(content, this.#proseOnlyThinking);
 					if (!display.visible) continue;
 					const thinkingLive = streaming && thinkingTail === index;

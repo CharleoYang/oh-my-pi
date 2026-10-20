@@ -1,4 +1,5 @@
 import { type Component, Container } from "../tui";
+import { chatTranscriptDisplayPreferences } from "../chat/display-preferences";
 import { col } from "../native/describe";
 import type { NativeNode } from "../native/node";
 export interface ToolActivityComponent {
@@ -41,7 +42,7 @@ export class ToolActivityContainer extends Container implements ToolActivityComp
 	}
 
 	override render(width: number): readonly string[] {
-		if (!this.#visible) return [];
+		if (!this.#visible || chatTranscriptDisplayPreferences.focusMode) return [];
 		return super.render(width);
 	}
 
@@ -57,7 +58,8 @@ export class ToolActivityContainer extends Container implements ToolActivityComp
 			return cached.node;
 		}
 		const snapshot = children.slice();
-		const node = col(snapshot, this.#visible ? { role: "omp.activity" } : { role: "omp.activity", hidden: true });
+		const visible = this.#visible && !chatTranscriptDisplayPreferences.focusMode;
+		const node = col(snapshot, visible ? { role: "omp.activity" } : { role: "omp.activity", hidden: true });
 		this.#native = { children: snapshot, visible: this.#visible, node };
 		return node;
 	}

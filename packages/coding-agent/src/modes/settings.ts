@@ -670,6 +670,19 @@ export const cfgDisplayHideToolActivity = register({
 	},
 });
 
+export const cfgDisplayFocusMode = register({
+	id: "display.focusMode",
+	type: "boolean",
+	default: false,
+	ui: {
+		tab: "appearance",
+		group: "Display",
+		label: "Focus Mode",
+		description:
+			"Show only prompts and final answers: hide tool activity, thinking, and interim assistant messages behind one activity line",
+	},
+});
+
 export const cfgDisplayShowTokenUsage = register({
 	id: "display.showTokenUsage",
 	type: "boolean",
@@ -713,6 +726,7 @@ effect(
 		cacheMissMarker: cfgDisplayCacheMissMarker,
 		showTokenUsage: cfgDisplayShowTokenUsage,
 		showTurnTime: cfgDisplayShowTurnTime,
+		focusMode: cfgDisplayFocusMode,
 	}),
 	setChatTranscriptDisplayPreferences,
 );

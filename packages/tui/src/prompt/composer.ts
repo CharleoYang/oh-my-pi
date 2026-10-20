@@ -153,6 +153,8 @@ export interface ViewportClickSpan {
 	end: number;
 	/** Candidate subagent ids for a span-local row. */
 	candidates: (local: number) => string[];
+	/** In-place action (a focus summary's expand/fold) taken before agent focus. */
+	activate?: () => void;
 }
 
 /**
@@ -175,6 +177,18 @@ export function routeViewportClick(spans: readonly ViewportClickSpan[], index: n
 		return span.candidates(index - span.start);
 	}
 	return [];
+}
+
+/** Run an in-place click action under `index`; true when a span handled it. */
+export function routeViewportActivation(spans: readonly ViewportClickSpan[], index: number): boolean {
+	if (!Number.isInteger(index) || index < 0) return false;
+	for (const span of spans) {
+		if (index < span.start || index >= span.end) continue;
+		if (!span.activate) return false;
+		span.activate();
+		return true;
+	}
+	return false;
 }
 
 /**
@@ -457,9 +471,24 @@ export class Composer implements TerminalFrameProvider, NativeSurfaceProvider {
 		const active = transcript.renderViewport(width, Math.max(0, rows - before.length - belowFloor), frame);
 		const activeSpans: ViewportClickSpan[] = [];
 		for (const span of transcript.getLastViewportSpans()) {
-			const ids = (span.component as Partial<{ getClickFocusAgentIds(): string[] }>).getClickFocusAgentIds?.();
-			if (!ids || ids.length === 0) continue;
-			activeSpans.push({ start: span.start, end: span.end, candidates: () => ids });
+			const clickable = span.component as Partial<{
+				getClickFocusAgentIds(): string[];
+				inlineClick(): void;
+			}>;
+			const ids = clickable.getClickFocusAgentIds?.();
+			if (ids && ids.length > 0) {
+				activeSpans.push({ start: span.start, end: span.end, candidates: () => ids });
+				continue;
+			}
+			const activate = clickable.inlineClick;
+			if (activate) {
+				activeSpans.push({
+					start: span.start,
+					end: span.end,
+					candidates: () => [],
+					activate: () => activate.call(span.component),
+				});
+			}
 		}
 		const drop = Math.max(0, before.length + active.length + after.length - rows);
 		const mutable = [...before, ...active, ...after].slice(drop);
@@ -506,7 +535,12 @@ export class Composer implements TerminalFrameProvider, NativeSurfaceProvider {
 				// A clipped head must offset the callback: without the skew the
 				// first visible row would hit-test as span-local row 0.
 				const skew = clamped - start;
-				spans.push({ start: clamped, end, candidates: (local: number) => span.candidates(local + skew) });
+				spans.push({
+					start: clamped,
+					end,
+					candidates: (local: number) => span.candidates(local + skew),
+					activate: span.activate,
+				});
 			}
 		};
 		for (const span of activeSpans) shift(span, before.length - drop);
@@ -633,6 +667,11 @@ export class Composer implements TerminalFrameProvider, NativeSurfaceProvider {
 	 */
 	viewportClickCandidates(index: number): string[] {
 		return routeViewportClick(this.#lastClickSpans, index);
+	}
+
+	/** Run an in-place click action (a focus summary's expand/fold) under `index`. */
+	viewportClickActivation(index: number): boolean {
+		return routeViewportActivation(this.#lastClickSpans, index);
 	}
 
 	/**

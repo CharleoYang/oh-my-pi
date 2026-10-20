@@ -1,11 +1,32 @@
-import { describe, expect, it, vi } from "bun:test";
+import { describe, expect, it, vi, beforeAll } from "bun:test";
 import { AssistantMessageComponent } from "@oh-my-pi/pi-tui/chat/assistant-message";
+import { FocusSummaryComponent } from "@oh-my-pi/pi-tui/chat/focus-summary";
+import { initTheme } from "@oh-my-pi/pi-tui/theme";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { InputController } from "@oh-my-pi/pi-coding-agent/modes/controllers/input-controller";
 import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
 import { cfgDisplayHideToolActivity } from "@oh-my-pi/pi-coding-agent/modes/settings";
 
 describe("InputController tool output expansion", () => {
+	beforeAll(async () => {
+		await initTheme(false);
+	});
+
+	it("expands the latest focus summary instead of refusing in focus mode", () => {
+		const summary = new FocusSummaryComponent({ tools: 2, subagents: 0 });
+		const ctx = {
+			focusMode: true,
+			chatContainer: { children: [summary] },
+			showStatus: vi.fn(),
+		} as unknown as InteractiveModeContext;
+		const controller = new InputController(ctx);
+
+		controller.toggleToolOutputExpansion();
+		expect(summary.expanded).toBe(true);
+		controller.toggleToolOutputExpansion();
+		expect(summary.expanded).toBe(false);
+	});
+
 	it("expands children and forces a full repaint so every live block re-renders", () => {
 		const expandable = { setExpanded: vi.fn() };
 		const inert = { render: vi.fn(() => []) };
@@ -35,6 +56,7 @@ describe("InputController tool output expansion", () => {
 		const showStatus = vi.fn();
 		const ctx = {
 			hideToolActivity: true,
+			effectiveHideToolActivity: true,
 			toolOutputExpanded: false,
 			chatContainer: { children: [expandable] },
 			keybindings: { getKeys: vi.fn(() => ["alt+h"]) },

@@ -44,6 +44,7 @@ import { cfgSkillful } from "../session/settings";
 import { formatSlowModeResetClock } from "../session/anthropic-slow-mode";
 import { cfgExtendedContext } from "../session/context-settings";
 import { cfgGoalEnabled } from "../goals/settings";
+import { cfgDisplayFocusMode } from "../modes/settings";
 import { cfgPlanEnabled } from "../plan-mode/settings";
 
 export function refreshStatusLine(ctx: InteractiveModeContext): void {
@@ -304,6 +305,21 @@ export const BUILTIN_MODE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		handleTui: (_command, runtime) => {
 			runtime.ctx.showSettingsSelector();
 			clearSubmittedText(runtime);
+		},
+	},
+	{
+		name: "focus",
+		icon: "eye",
+		description: "Toggle focus mode: hide tool activity, thinking, and interim messages",
+		handleTui: (_command, runtime) => {
+			const next = !cfgDisplayFocusMode.get(runtime.ctx.settings);
+			cfgDisplayFocusMode.set(runtime.ctx.settings, next);
+			clearSubmittedText(runtime);
+			runtime.ctx.showStatus(
+				next
+					? "Focus mode on — prompts, final answers, and an activity summary only"
+					: "Focus mode off — full transcript restored",
+			);
 		},
 	},
 	{

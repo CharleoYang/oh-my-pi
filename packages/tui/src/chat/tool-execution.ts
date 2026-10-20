@@ -7,6 +7,7 @@ import { Spacer } from "../components/spacer";
 import { Text } from "../components/text";
 import { getImageDimensions, ImageProtocol, imageFallback, TERMINAL } from "../terminal-capabilities";
 import { type Component, Container, type TUI } from "../tui";
+import { chatTranscriptDisplayPreferences } from "./display-preferences";
 import { truncateToWidth } from "../utils";
 import { getProjectDir, isRecord, logger, sanitizeText, sanitizeTextDeep } from "@oh-my-pi/pi-utils";
 import type { Theme } from "../theme/theme";
@@ -377,6 +378,8 @@ export class ToolExecutionComponent extends Container {
 	#allocation = Number.POSITIVE_INFINITY;
 	#presentationFrame: AnimationFrame = { tick: 0, now: 0 };
 	#toolActivityVisible = true;
+	/** Focus mode folds this card; its turn's summary can expand it again. */
+	#focusExpanded = false;
 	#showImages: boolean;
 	#isPartial = true;
 	// A background task whose call already returned; later async job frames are
@@ -827,7 +830,8 @@ export class ToolExecutionComponent extends Container {
 
 	/** Whether the result's figure still waits for its raster; the transcript holds retirement meanwhile. */
 	isTranscriptBlockPending(): boolean {
-		return this.#toolActivityVisible && this.#figure?.pending === true;
+		const hidden = chatTranscriptDisplayPreferences.focusMode ? !this.#focusExpanded : !this.#toolActivityVisible;
+		return !hidden && this.#figure?.pending === true;
 	}
 
 	/**
@@ -836,7 +840,8 @@ export class ToolExecutionComponent extends Container {
 	 * until they settle. Hidden blocks render no rows and cannot gate history.
 	 */
 	isTranscriptBlockFinalized(): boolean {
-		if (!this.#toolActivityVisible) return true;
+		const hidden = chatTranscriptDisplayPreferences.focusMode ? !this.#focusExpanded : !this.#toolActivityVisible;
+		if (hidden) return true;
 		if (this.#sealed) return true;
 		if (this.#result === undefined) return false;
 		// A parked background task's call already returned; job frames that land
@@ -996,11 +1001,18 @@ export class ToolExecutionComponent extends Container {
 			this.#showImages,
 			this.#displayInputVersion,
 			this.#toolActivityVisible,
+			chatTranscriptDisplayPreferences.focusMode,
+			this.#focusExpanded,
 			media,
 			getThemeEpoch(),
 		];
+		const foldedByFocus = chatTranscriptDisplayPreferences.focusMode && !this.#focusExpanded;
+		const hiddenByActivity = !chatTranscriptDisplayPreferences.focusMode && !this.#toolActivityVisible;
 		return this.#native.get(key, () =>
-			withHidden(dataFirst ? this.#describeTool(media) : this.#describeCard(media), !this.#toolActivityVisible),
+			withHidden(
+				dataFirst ? this.#describeTool(media) : this.#describeCard(media),
+				foldedByFocus || hiddenByActivity,
+			),
 		);
 	}
 
@@ -1279,6 +1291,13 @@ export class ToolExecutionComponent extends Container {
 		super.invalidate();
 	}
 
+	/** Show this card even though focus mode folds the turn it belongs to. */
+	setFocusExpanded(expanded: boolean): void {
+		if (this.#focusExpanded === expanded) return;
+		this.#focusExpanded = expanded;
+		super.invalidate();
+	}
+
 	setShowImages(show: boolean): void {
 		this.#showImages = show;
 		this.#updateDisplay();
@@ -1337,11 +1356,18 @@ export class ToolExecutionComponent extends Container {
 	}
 
 	override render(width: number): readonly string[] {
-		if (!this.#toolActivityVisible || this.#allocation === 0 || (this.#toolName === "wait" && this.#isBenignSkip())) {
+		const foldedByFocus = chatTranscriptDisplayPreferences.focusMode && !this.#focusExpanded;
+		const hiddenByActivity = !chatTranscriptDisplayPreferences.focusMode && !this.#toolActivityVisible;
+		if (
+			foldedByFocus ||
+			hiddenByActivity ||
+			(this.#allocation === 0 && !this.#focusExpanded) ||
+			(this.#toolName === "wait" && this.#isBenignSkip())
+		) {
 			return [];
 		}
 		let lines = super.render(width);
-		if (this.#allocation < 3) {
+		if (this.#allocation < 3 && !this.#focusExpanded) {
 			// A squeezed allocation degrades only blocks that genuinely overflow it.
 			// The allocator measures blocks by trimmed height and never squeezes one
 			// below that, so inline tools whose real content is 1-2 rows (wait

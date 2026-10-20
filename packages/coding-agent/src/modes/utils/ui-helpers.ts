@@ -80,6 +80,7 @@ import type { SessionContext, StrippedToolCallsMarker } from "../../session/sess
 import { executeBuiltinSlashCommand, lookupBuiltinSlashCommand } from "../../slash-commands/builtin-registry";
 import { parseSlashCommand } from "../../slash-commands/helpers/parse";
 import { buildSkillCommandPrompt, invokeSkillCommandFromText, isKnownSkillCommand } from "../skill-command";
+import { applyFocusModeToTranscript } from "./focus-mode";
 import {
 	createAssistantMessageComponent,
 	getAssistantMessageLinkTargets,
@@ -521,7 +522,10 @@ export class UiHelpers {
 		let turnStartedAt: number | undefined;
 		const flushPendingUsage = () => {
 			if (!pendingUsage) return;
+			// A folded read group cannot carry the usage row in focus mode; keep a
+			// standalone line so every replayed turn shows its stats.
 			const usageAttached =
+				!this.ctx.focusMode &&
 				pendingReadUsageCallIds !== undefined &&
 				(readGroup?.attachUsage(
 					pendingReadUsageCallIds,
@@ -643,6 +647,7 @@ export class UiHelpers {
 						segment,
 						getAssistantMessageLinkTargets(this.ctx),
 					);
+					if (this.ctx.focusMode) component.setFocusInterim(true);
 					this.ctx.chatContainer.addChild(component);
 				};
 
@@ -752,11 +757,15 @@ export class UiHelpers {
 				const strippedToolCalls = (message as AgentMessage & StrippedToolCallsMarker).strippedToolCalls ?? 0;
 				if (strippedToolCalls > 0) {
 					this.ctx.chatContainer.addChild(
-						new StrippedToolCallsPlaceholder(strippedToolCalls, !this.ctx.hideToolActivity),
+						new StrippedToolCallsPlaceholder(strippedToolCalls, !this.ctx.effectiveHideToolActivity),
 					);
 				}
 				pendingUsage =
-					cfgDisplayShowTokenUsage.get(this.ctx.settings) && assistantUsageIsBilled(message.usage)
+					cfgDisplayShowTokenUsage.get(this.ctx.settings) &&
+					assistantUsageIsBilled(message.usage) &&
+					// Focus mode keeps one stats line per turn: intermediate requests
+					// are folded, so their usage rows would stack without content.
+					!(this.ctx.focusMode && message.content.some(content => content.type === "toolCall"))
 						? message.usage
 						: undefined;
 				pendingUsageDuration = message.duration;
@@ -1082,7 +1091,7 @@ export class UiHelpers {
 		// until the replacement is ready to swap in.
 		const visibleChatContainer = this.ctx.chatContainer;
 		const stagedChatContainer = new TranscriptContainer();
-		stagedChatContainer.setToolActivityVisible(!this.ctx.hideToolActivity);
+		stagedChatContainer.setToolActivityVisible(!this.ctx.effectiveHideToolActivity);
 		const preservedChatChildren = options.preserveExistingChat ? [...visibleChatContainer.children] : undefined;
 		const previousTranscriptMessageComponents = this.ctx.transcriptMessageComponents;
 		const previousPendingTools = this.ctx.pendingTools;
@@ -1155,6 +1164,19 @@ export class UiHelpers {
 				this.ctx.pendingTools.clear();
 				this.ctx.pendingBashComponents = [];
 				this.ctx.pendingPythonComponents = [];
+			}
+
+			if (this.ctx.focusMode) {
+				applyFocusModeToTranscript(
+					stagedChatContainer,
+					this.ctx.transcriptMessageComponents,
+					context.messages,
+					() => {
+						// Expanded rows may already sit in terminal history; rebuild it.
+						this.ctx.chatContainer.resetStableEmission();
+						this.ctx.ui.resetDisplay();
+					},
+				);
 			}
 
 			const replayedChatChildren = [...stagedChatContainer.children];

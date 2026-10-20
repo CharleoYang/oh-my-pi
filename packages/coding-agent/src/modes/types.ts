@@ -173,6 +173,8 @@ export interface InteractiveModeContext {
 	invalidatePendingFocus(): void;
 	/** Candidate subagent ids under a mutable-viewport line, for click-to-focus. Empty when the line has no target. */
 	resolveViewportClickCandidates(index: number): string[];
+	/** Run an in-place transcript click action; false when the row has none. */
+	activateViewportClick(index: number): boolean;
 	/** Flip the pinned jump list between its collapsed few and the full list. */
 	togglePinnedHudExpanded(): void;
 	/** Point the inline hover band at a click-candidate id (or clear it). */
@@ -211,6 +213,10 @@ export interface InteractiveModeContext {
 	isBashMode: boolean;
 	toolOutputExpanded: boolean;
 	hideToolActivity: boolean;
+	/** Claude Code-style focus mode: hide tool activity, thinking, and interim answers. */
+	focusMode: boolean;
+	/** `hideToolActivity || focusMode`: the visibility the transcript actually applies. */
+	readonly effectiveHideToolActivity: boolean;
 	todoExpanded: boolean;
 	planModeEnabled: boolean;
 	vibeModeEnabled: boolean;
@@ -224,9 +230,9 @@ export interface InteractiveModeContext {
 	planModePlanFilePath?: string;
 	hideThinkingBlock: boolean;
 	/**
-	 * Effective thinking-block visibility: true when hidden by user setting OR
-	 * thinking level is "off" before the session has produced displayable
-	 * thinking content.
+	 * Effective thinking-block visibility: true when hidden by focus mode or the
+	 * user's setting, or when thinking level is "off" before the session has
+	 * produced displayable thinking content.
 	 */
 	readonly effectiveHideThinkingBlock: boolean;
 	readonly assistantImagesVisible: boolean;

@@ -8,6 +8,8 @@ import { extractTextContent } from "../../commit/utils";
 import { settings } from "../../config/settings";
 import { AssistantMessageComponent } from "@oh-my-pi/pi-tui/chat/assistant-message";
 import { detectCacheInvalidation } from "@oh-my-pi/pi-tui/chat/cache-invalidation-marker";
+import { FocusSummaryComponent, isFocusExpandable } from "@oh-my-pi/pi-tui/chat/focus-summary";
+import { UserMessageComponent } from "@oh-my-pi/pi-tui/chat/user-message";
 import {
 	groupedReadUsageCallIds,
 	ReadToolGroupComponent,
@@ -249,6 +251,10 @@ export class EventController {
 	#orphanedToolCompletions = new Map<string, Extract<AgentSessionEvent, { type: "tool_execution_end" }>>();
 	#postToolAssistantComponents = new Map<string, AssistantMessageComponent>();
 	#lastAssistantComponent: AssistantMessageComponent | undefined = undefined;
+	/** Focus-mode tally for the running turn: hidden tool calls and subagent spawns. */
+	#focusToolCalls = 0;
+	#focusSubagentCalls = 0;
+	#focusSummaryAppended = false;
 	// Assistant component whose turn-ending error is currently mirrored in the
 	// pinned banner. Its inline `Error: …` line is suppressed while pinned and
 	// restored when the banner clears at the next `agent_start` (see
@@ -762,6 +768,7 @@ export class EventController {
 		}
 		const component = createAssistantMessageComponent(this.ctx, undefined, linkTargets);
 		component.updateContent(segment, opts);
+		if (this.ctx.focusMode) component.setFocusInterim(true);
 		this.#postToolAssistantComponents.set(toolCallId, component);
 		if (!this.#insertAfterTranscriptComponent(this.#toolTimelineComponents.get(toolCallId), component)) {
 			this.ctx.chatContainer.addChild(component);
@@ -1112,7 +1119,9 @@ export class EventController {
 		this.#seedHeldCompletionsFromPendingResults();
 		this.#resolveDisplaceableTodo();
 		this.#lastAssistantComponent = undefined;
-		// Restore terminal errors in transcript history when their banner clears.
+		this.#focusToolCalls = 0;
+		this.#focusSubagentCalls = 0;
+		this.#focusSummaryAppended = false;
 		// Recoverable empty-output attempts are discarded by session recovery and
 		// must stay hidden rather than resurfacing as a stale inline error.
 		if (this.#restorePinnedErrorInline) this.#pinnedErrorComponent?.setErrorPinned(false);
@@ -1272,6 +1281,10 @@ export class EventController {
 				abandoned.markTranscriptBlockFinalized();
 			}
 			this.#finalizeAbandonedPostToolSegments();
+			// A newer answer in the same run supersedes the previous one, which is
+			// therefore intermediate work. agent_start clears this anchor between
+			// runs, so the prior turn's final answer is never folded here.
+			if (this.ctx.focusMode) this.#lastAssistantComponent?.setFocusInterim(true);
 			this.#lastVisibleBlockCount = 0;
 			this.#streamedToolCallIdByIndex.clear();
 			this.ctx.streamingComponent = createAssistantMessageComponent(this.ctx);
@@ -1500,6 +1513,12 @@ export class EventController {
 				this.#streamingReveal.resyncVisibility();
 			}
 			this.ctx.streamingMessage = event.message;
+			// Focus mode folds intermediate work as soon as it stops being the
+			// answer: a message that streams a tool call will never be the turn's
+			// result, so its text collapses now rather than at message_end.
+			if (this.ctx.focusMode && this.ctx.streamingMessage.content.some(content => content.type === "toolCall")) {
+				this.ctx.streamingComponent.setFocusInterim(true);
+			}
 			const timeline = splitAssistantMessageToolTimeline(this.ctx.streamingMessage);
 			this.#streamingReveal.setTarget(timeline.beforeTools, timeline.hasToolCalls);
 
@@ -1811,6 +1830,9 @@ export class EventController {
 				this.ctx.lastAssistantUsage = usage;
 			}
 			this.ctx.streamingComponent.setServedModelMismatch(this.ctx.servedModelTracker.check(event.message));
+			if (this.ctx.focusMode && event.message.content.some(content => content.type === "toolCall")) {
+				this.ctx.streamingComponent.setFocusInterim(true);
+			}
 			this.ctx.streamingComponent.markTranscriptBlockFinalized();
 			let lastPostToolAssistantComponent: AssistantMessageComponent | undefined;
 			for (const [toolCallId, segment] of displayTimeline.afterToolCalls) {
@@ -1825,12 +1847,20 @@ export class EventController {
 			this.#lastAssistantComponent = lastPostToolAssistantComponent ?? this.ctx.streamingComponent;
 			const turnUsage = this.#turnUsage.add(event.message, this.#turnStartedAt);
 			if (turnUsage) this.#lastAssistantComponent.setTurnUsage(turnUsage);
-			if (cfgDisplayShowTokenUsage.get(settings) && assistantUsageIsBilled(event.message.usage)) {
+			if (
+				cfgDisplayShowTokenUsage.get(settings) &&
+				assistantUsageIsBilled(event.message.usage) &&
+				// One stats line per turn: folded intermediate requests do not add one.
+				!(this.ctx.focusMode && event.message.content.some(content => content.type === "toolCall"))
+			) {
 				const readCallIds = groupedReadUsageCallIds(event.message);
 				const turnElapsed = cfgDisplayShowTurnTime.get(settings)
 					? turnElapsedMs(this.#turnStartedAt, event.message)
 					: undefined;
+				// Folded tool cards cannot carry the usage row in focus mode; it must
+				// stay a standalone line so every turn keeps its stats.
 				const usageAttached =
+					!this.ctx.focusMode &&
 					readCallIds !== undefined &&
 					(this.#lastReadGroup?.attachUsage(
 						readCallIds,
@@ -1882,6 +1912,8 @@ export class EventController {
 
 	async #handleToolExecutionStart(event: Extract<AgentSessionEvent, { type: "tool_execution_start" }>): Promise<void> {
 		if (this.#retractedToolCallIds.has(event.toolCallId)) return;
+		this.#focusToolCalls++;
+		if (event.toolName === "task") this.#focusSubagentCalls++;
 		this.#ensureWorkingLoaderWhileStreaming();
 		this.#updateWorkingMessageFromIntent(event.intent);
 		const tool = this.ctx.viewSession.getToolByName(event.toolName);
@@ -2417,6 +2449,35 @@ export class EventController {
 		this.#resolveDisplaceablePoll();
 		this.#resolveDisplaceableTodo();
 		this.ctx.flushPendingCommandOutput();
+		if (this.ctx.focusMode && !this.#focusSummaryAppended && this.#focusToolCalls > 0) {
+			this.#focusSummaryAppended = true;
+			const children = this.ctx.chatContainer.children;
+			let turnStart = 0;
+			for (let index = children.length - 1; index >= 0; index--) {
+				if (children[index] instanceof UserMessageComponent) {
+					turnStart = index + 1;
+					break;
+				}
+			}
+			// The summary expands exactly the components this turn folded: tool
+			// cards and interim answers created after its prompt.
+			const group = children.slice(turnStart).filter(isFocusExpandable);
+			this.ctx.chatContainer.addChild(
+				new FocusSummaryComponent(
+					{ tools: this.#focusToolCalls, subagents: this.#focusSubagentCalls },
+					{
+						onToggle: expanded => {
+							for (const member of group) member.setFocusExpanded(expanded);
+						},
+						requestRender: () => {
+							// Expanded rows may already sit in terminal history; rebuild it.
+							this.ctx.chatContainer.resetStableEmission();
+							this.ctx.ui.resetDisplay();
+						},
+					},
+				),
+			);
+		}
 		this.#lastAssistantComponent = undefined;
 		// When the interrupted/failed turn died on a tool call, this replaces the
 		// torn-down "Working…" row with the "F5 to Retry" affordance.
