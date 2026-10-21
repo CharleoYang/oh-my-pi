@@ -5,6 +5,63 @@
  * without dragging server dependencies into its bundle.
  */
 
+export type {
+	ContextAgentUsage,
+	ContextCategoryId,
+	ContextCategoryTokens,
+	ContextEvent,
+	ContextEventKind,
+	ContextFileActivity,
+	ContextNamedTokens,
+	ContextSnapshotDetails,
+	ContextStep,
+	ContextStepDetails,
+	ContextStepUsage,
+	ContextTimeline,
+	ContextTimelineLimits,
+} from "@oh-my-pi/pi-ai";
+
+/** Bounded ranges supported by the context overview. */
+export type TimeRange = "1h" | "24h" | "7d" | "30d" | "90d";
+
+/** One root session, including child transcripts, within the overview cutoff. */
+export interface ContextSessionRow {
+	file: string;
+	folder: string;
+	title: string | null;
+	models: string[];
+	/** First and last request in range, not lifetime activity. */
+	startedAt: number;
+	endedAt: number;
+	requests: number;
+	totalTokens: number;
+	/** DB approximation: input + cache read + cache write. */
+	promptTokens: number;
+	peakPromptTokens: number;
+	avgPromptTokens: number;
+}
+
+/** Range-scoped payload for GET /api/context/overview. */
+export interface ContextOverview {
+	range: TimeRange;
+	cutoff: number;
+	/** Hourly for 1h/24h/7d, daily for 30d/90d. */
+	heatmapBucketMs: number;
+	kpi: {
+		sessions: number;
+		requests: number;
+		avgPromptTokens: number;
+		peakPromptTokens: number;
+		totalTokens: number;
+	};
+	heatmap: Array<{ bucket: number; requests: number; promptTokens: number }>;
+	sessions: ContextSessionRow[];
+	/** Range-active roots beyond the 200-row response cap. */
+	omittedSessions: number;
+	omittedRequests: number;
+	omittedPromptTokens: number;
+}
+
 /**
  * Aggregated stats for a model or folder.
  */

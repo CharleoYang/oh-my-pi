@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added a range-scoped Context overview API with root-session and child-transcript aggregation, activity heatmaps, prompt-token KPIs, and explicit totals for sessions beyond the 200-row limit.
+
 ## [18.12.0] - 2026-10-17
 
 ### Fixed

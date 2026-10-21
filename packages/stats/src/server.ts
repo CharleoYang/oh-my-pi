@@ -17,6 +17,7 @@ import {
 	getTimeRangeConfig,
 	getToolDashboardStats,
 } from "./aggregator";
+import { getContextOverview } from "./context";
 import { initDb } from "./db";
 import { decodeEmbeddedClientArchive, hasEmbeddedClientArchive } from "./embedded-client";
 import embeddedClientArchiveTxt from "./embedded-client.generated.txt";
@@ -39,6 +40,7 @@ import {
 	STATS_DASHBOARD_SECURITY_VERSION,
 } from "./port-conflict";
 import { getStatsByModel, getTimeSeries } from "./rollup";
+import type { TimeRange } from "./shared-types";
 import {
 	buildSessionTrace,
 	getTraceEntry,
@@ -185,6 +187,14 @@ export async function handleApi(req: Request): Promise<Response> {
 	if (path === "/api/stats/overview") {
 		const stats = await getOverviewStats(range);
 		return Response.json(stats);
+	}
+
+	if (path === "/api/context/overview") {
+		const contextRange = range ?? "24h";
+		if (!["1h", "24h", "7d", "30d", "90d"].includes(contextRange)) {
+			return Response.json({ error: "invalid range" }, { status: 400 });
+		}
+		return Response.json(await getContextOverview(contextRange as TimeRange));
 	}
 
 	if (path === "/api/stats/model-dashboard") {
