@@ -32,6 +32,8 @@ interface FoldedTranscript {
 	timeline: ContextTimeline;
 	agent: string | undefined;
 	model: string | undefined;
+	/** Usage cost across the full active branch, before any step cap. */
+	costTotal: number;
 }
 function resolveContextFile(file: string): string {
 	return resolveSessionPath(path.isAbsolute(file) ? file : path.join(getSessionsDir(), file));
@@ -62,6 +64,31 @@ function activeBranchEntries(entries: readonly JournalView[]): JournalView[] {
 
 const READ_SELECTOR = /:(?:raw|conflicts|img|[\d.,+-]+)$/i;
 
+/** Sum assistant usage cost with the same dedupe/step-eligibility rules as the shared fold. */
+function branchCost(entries: readonly JournalView[]): number {
+	const seen = new Set<string>();
+	let total = 0;
+	for (const entry of entries) {
+		if (entry.id !== undefined) {
+			if (typeof entry.id !== "string" || seen.has(entry.id)) continue;
+			seen.add(entry.id);
+		}
+		const message = entry.message;
+		if (message?.role !== "assistant") continue;
+		const snapshot = message.contextSnapshot;
+		if (!snapshot) {
+			const usage = message.usage;
+			const prompt =
+				(usage?.contextTokens ?? 0) > 0 ||
+				(usage?.input ?? 0) + (usage?.cacheRead ?? 0) + (usage?.cacheWrite ?? 0) > 0;
+			if (!prompt) continue;
+		}
+		const cost = message.usage?.cost?.total;
+		if (typeof cost === "number" && Number.isFinite(cost)) total += cost;
+	}
+	return total;
+}
+
 async function foldTranscript(file: string, limits?: Partial<ContextTimelineLimits>): Promise<FoldedTranscript> {
 	// Stats mirrors the journal structurally; the shared fold validates fields at its boundary.
 	const entries = parseAllSessionEntries(await readTranscript(file)) as unknown as JournalView[];
@@ -79,12 +106,13 @@ async function foldTranscript(file: string, limits?: Partial<ContextTimelineLimi
 			if (typeof entry.resolvedModel === "string") model = entry.resolvedModel;
 		}
 	}
+	const branch = activeBranchEntries(entries);
 	const timeline = foldContextTimeline({
 		sessionId,
 		file,
 		cwd,
 		source: "journal",
-		entries: activeBranchEntries(entries),
+		entries: branch,
 		limits,
 		agents: [],
 		normalizePath(value) {
@@ -96,11 +124,11 @@ async function foldTranscript(file: string, limits?: Partial<ContextTimelineLimi
 			return cwd ? path.resolve(cwd, stripped) : "";
 		},
 	});
-	return { timeline, agent, model };
+	return { timeline, agent, model, costTotal: branchCost(branch) };
 }
 
 function fleetRow(file: string, trackId: string, folded: FoldedTranscript): ContextAgentUsage {
-	const { timeline, agent, model } = folded;
+	const { timeline, agent, model, costTotal } = folded;
 	// Classification operates on the uncompressed name, including advisor markers.
 	const status = classifyAgentType(file.endsWith(".gz") ? file.slice(0, -3) : file);
 	const last = timeline.steps.at(-1);
@@ -118,7 +146,7 @@ function fleetRow(file: string, trackId: string, folded: FoldedTranscript): Cont
 		requests: timeline.steps.length + timeline.omittedSteps,
 		peakTokens: timeline.peakTokens,
 		lastTokens: last?.promptTokens,
-		costTotal: timeline.steps.reduce((sum, step) => sum + (step.usage?.costTotal ?? 0), 0),
+		costTotal,
 	};
 }
 

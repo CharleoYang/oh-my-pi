@@ -343,6 +343,22 @@ async function writeFixture(): Promise<string> {
 }
 
 describe("buildSessionTrace", () => {
+	it("invalidates the memo when a child is compressed at the same mtime", async () => {
+		const rootFile = await writeFixture();
+		const first = await buildSessionTrace(rootFile);
+		const child = path.join(path.dirname(rootFile), "1700000000000_test", "Scout1.jsonl");
+		const mtimeMs = (await fs.stat(child)).mtimeMs;
+		const compressed = `${child}.gz`;
+		await Bun.write(compressed, Bun.gzipSync(await fs.readFile(child)));
+		await fs.rm(child);
+		await fs.utimes(compressed, mtimeMs / 1000, mtimeMs / 1000);
+
+		const second = await buildSessionTrace(rootFile);
+		expect(second).not.toBe(first);
+		expect(first.tracks.find(track => track.id === "Scout1")?.file).toBe(child);
+		expect(second.tracks.find(track => track.id === "Scout1")?.file).toBe(compressed);
+	});
+
 	it("assembles model, tool, turn, subagent, and background spans with correct timing joins", async () => {
 		const rootFile = await writeFixture();
 		const trace = await buildSessionTrace(rootFile);

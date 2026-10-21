@@ -661,6 +661,8 @@ async function directChildTranscripts(file: string): Promise<string[]> {
 export interface ChildTranscript {
 	file: string;
 	key: string;
+	/** Filename-preserving relative key for freshness fingerprints. */
+	fingerprintKey: string;
 	depth: number;
 }
 
@@ -668,18 +670,20 @@ export interface ChildTranscript {
 export async function discoverChildTranscripts(rootFile: string): Promise<ChildTranscript[]> {
 	const children: ChildTranscript[] = [];
 	const visited = new Set([rootFile]);
-	const walk = async (file: string, parentKey: string, depth: number): Promise<void> => {
+	const walk = async (file: string, parentKey: string, parentFingerprintKey: string, depth: number): Promise<void> => {
 		if (depth >= MAX_TRACK_DEPTH) return;
 		for (const childFile of await directChildTranscripts(file)) {
 			if (visited.has(childFile)) continue;
 			visited.add(childFile);
 			const stem = path.basename(transcriptStem(childFile));
+			const name = path.basename(childFile);
 			const key = parentKey ? `${parentKey}/${stem}` : stem;
-			children.push({ file: childFile, key, depth: depth + 1 });
-			await walk(childFile, key, depth + 1);
+			const fingerprintKey = parentFingerprintKey ? `${parentFingerprintKey}/${name}` : name;
+			children.push({ file: childFile, key, fingerprintKey, depth: depth + 1 });
+			await walk(childFile, key, fingerprintKey, depth + 1);
 		}
 	};
-	await walk(rootFile, "", 0);
+	await walk(rootFile, "", "", 0);
 	return children;
 }
 
@@ -810,9 +814,9 @@ export async function childTranscriptsFingerprint(rootFile: string): Promise<str
 	const parts = await Promise.all(
 		children.map(async child => {
 			try {
-				return `${child.key}@${(await fs.stat(child.file)).mtimeMs}`;
+				return `${child.fingerprintKey}@${(await fs.stat(child.file)).mtimeMs}`;
 			} catch {
-				return `${child.key}@gone`;
+				return `${child.fingerprintKey}@gone`;
 			}
 		}),
 	);

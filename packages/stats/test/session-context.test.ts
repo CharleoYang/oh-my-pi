@@ -51,6 +51,24 @@ function request(file: string, etag?: string) {
 }
 
 describe("session context", () => {
+	it("keeps fleet cost over the full branch when steps are truncated", async () => {
+		const entries: unknown[] = [{ type: "session", id: "session-cost", cwd: "/work/project" }];
+		let parent: string | null = null;
+		for (let index = 0; index < 1001; index++) {
+			const id = `s${index}`;
+			entries.push({
+				...assistant(id, parent, 1),
+				message: { ...assistant(id, parent, 1).message, usage: { input: 1, output: 1, cost: { total: 1 } } },
+			});
+			parent = id;
+		}
+		const file = await fixture("cost-cap", entries);
+		const timeline = await buildSessionContextTimeline(file);
+		expect(timeline.steps).toHaveLength(1000);
+		expect(timeline.omittedSteps).toBe(1);
+		expect(timeline.agents[0]).toMatchObject({ trackId: "main", requests: 1001, costTotal: 1001 });
+	});
+
 	it("serves the active branch, not a stale sibling, with a reusable ETag", async () => {
 		const file = await fixture("route", [
 			{ type: "session", id: "session-route", cwd: "/work/project" },
