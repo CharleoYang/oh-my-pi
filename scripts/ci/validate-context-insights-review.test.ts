@@ -1,29 +1,32 @@
 import { afterEach, describe, expect, it } from "bun:test";
-import * as fs from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import * as path from "node:path";
-import { TempDir } from "@oh-my-pi/pi-utils";
 import { type ReviewRecord, validateReview } from "./validate-context-insights-review";
 
 const REVIEW_PATH = path.join("spec", "001-omp-context-insights", "design-review.md");
 
-let temp: TempDir | undefined;
+let tempDir: string | undefined;
+
+function writeReview(text: string): string {
+	tempDir = mkdtempSync(path.join(tmpdir(), "context-review-validator-"));
+	const file = path.join(tempDir, "design-review.md");
+	writeFileSync(file, text);
+	return file;
+}
 
 function withRecord(mutate: (record: ReviewRecord) => void): string {
-	temp = TempDir.createSync("@context-review-validator-");
-	const text = fs.readFileSync(REVIEW_PATH, "utf8");
+	const text = readFileSync(REVIEW_PATH, "utf8");
 	const match = /```json\s*\n([\s\S]*?)\n```/g.exec(text);
 	if (!match) throw new Error("fixture review has no json block");
 	const record = JSON.parse(match[1]!) as ReviewRecord;
 	mutate(record);
-	const replaced = text.replace(match[0], `\`\`\`json\n${JSON.stringify(record, null, 2)}\n\`\`\``);
-	const file = path.join(temp.path(), "design-review.md");
-	fs.writeFileSync(file, replaced);
-	return file;
+	return writeReview(text.replace(match[0], `\`\`\`json\n${JSON.stringify(record, null, 2)}\n\`\`\``));
 }
 
 afterEach(() => {
-	temp?.removeSync();
-	temp = undefined;
+	if (tempDir) rmSync(tempDir, { recursive: true, force: true });
+	tempDir = undefined;
 });
 
 describe("context insights S2-R review validator", () => {
@@ -59,7 +62,22 @@ describe("context insights S2-R review validator", () => {
 		expect(validateReview(file).some(problem => problem.includes("at least 3 findings"))).toBe(true);
 	});
 
+	it("rejects a prose-only review with no JSON record", () => {
+		const file = writeReview("# Review\n\nVerdict: pass\n\nNo machine-readable record.\n");
+		expect(validateReview(file)).toContain(
+			"invalid review record: expected exactly one fenced json block, found 0",
+		);
+	});
+
+	it("rejects multiple JSON records", () => {
+		const text = readFileSync(REVIEW_PATH, "utf8");
+		const file = writeReview(`${text}\n\`\`\`json\n{"reviewer":"other","verdict":"pass","findings":[]}\n\`\`\`\n`);
+		expect(validateReview(file)).toContain("invalid review record: expected exactly one fenced json block, found 2");
+	});
+
 	it("rejects a missing review file", () => {
-		expect(validateReview("/definitely/not/a/review.md")).toEqual(["missing review document: /definitely/not/a/review.md"]);
+		expect(validateReview("/definitely/not/a/review.md")).toEqual([
+			"missing review document: /definitely/not/a/review.md",
+		]);
 	});
 });

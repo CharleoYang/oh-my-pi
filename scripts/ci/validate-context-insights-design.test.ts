@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from "bun:test";
-import * as fs from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import * as path from "node:path";
-import { TempDir } from "@oh-my-pi/pi-utils";
 import { validateDesignPackage } from "./validate-context-insights-design";
 
 const SPEC_DIR = path.join("spec", "001-omp-context-insights");
@@ -13,20 +13,20 @@ const DOCS = [
 	"[类图] context-insights.md",
 ];
 
-let temp: TempDir | undefined;
+let tempDir: string | undefined;
 
 function copySpec(mutate: (files: Record<string, string>) => void): string {
-	temp = TempDir.createSync("@context-design-validator-");
+	tempDir = mkdtempSync(path.join(tmpdir(), "context-design-validator-"));
 	const files: Record<string, string> = {};
-	for (const doc of DOCS) files[doc] = fs.readFileSync(path.join(SPEC_DIR, doc), "utf8");
+	for (const doc of DOCS) files[doc] = readFileSync(path.join(SPEC_DIR, doc), "utf8");
 	mutate(files);
-	for (const [doc, content] of Object.entries(files)) fs.writeFileSync(path.join(temp.path(), doc), content);
-	return temp.path();
+	for (const [doc, content] of Object.entries(files)) writeFileSync(path.join(tempDir, doc), content);
+	return tempDir;
 }
 
 afterEach(() => {
-	temp?.removeSync();
-	temp = undefined;
+	if (tempDir) rmSync(tempDir, { recursive: true, force: true });
+	tempDir = undefined;
 });
 
 describe("context insights S2 design validator", () => {
@@ -43,24 +43,38 @@ describe("context insights S2 design validator", () => {
 
 	it("fails when a design section is missing", () => {
 		const dir = copySpec(files => {
-			files["[设计文档] context-insights.md"] = files["[设计文档] context-insights.md"].replace("## 4. 算法", "## 4. Removed");
+			files["[设计文档] context-insights.md"] = files["[设计文档] context-insights.md"].replace(
+				"## 4. 算法",
+				"## 4. Removed",
+			);
 		});
 		expect(validateDesignPackage(dir)).toContain("[设计文档] context-insights.md missing: ## 4. 算法");
 	});
 
 	it("fails when a category id is not shared", () => {
 		const dir = copySpec(files => {
-			files["[接口文档] context-insights.md"] = files["[接口文档] context-insights.md"].replaceAll("systemContext", "systemCtx");
+			files["[接口文档] context-insights.md"] = files["[接口文档] context-insights.md"].replaceAll(
+				"systemContext",
+				"systemCtx",
+			);
 		});
 		expect(validateDesignPackage(dir)).toContain("[接口文档] context-insights.md missing category id: systemContext");
 	});
 
 	it("fails when the unattributed remainder is undefined", () => {
 		const dir = copySpec(files => {
-			files["[设计文档] context-insights.md"] = files["[设计文档] context-insights.md"].replaceAll("unattributed", "other");
-			files["[接口文档] context-insights.md"] = files["[接口文档] context-insights.md"].replaceAll("unattributed", "other");
+			files["[设计文档] context-insights.md"] = files["[设计文档] context-insights.md"].replaceAll(
+				"unattributed",
+				"other",
+			);
+			files["[接口文档] context-insights.md"] = files["[接口文档] context-insights.md"].replaceAll(
+				"unattributed",
+				"other",
+			);
 		});
-		expect(validateDesignPackage(dir)).toContain("both design and interface must define the `unattributed` remainder");
+		expect(validateDesignPackage(dir)).toContain(
+			"both design and interface must define the `unattributed` remainder",
+		);
 	});
 
 	it("fails when a sequence diagram is absent", () => {

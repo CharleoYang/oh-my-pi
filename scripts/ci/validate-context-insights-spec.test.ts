@@ -25,6 +25,14 @@ describe("context insights S1 intake validator", () => {
 		expect(validateSpec(text).some(problem => problem.includes("at least 10 B-rows"))).toBe(true);
 	});
 
+	it("fails when a retained baseline row has no code evidence", () => {
+		const lines = fs.readFileSync(SPEC_PATH, "utf8").split("\n");
+		const index = lines.findIndex(line => /^\| B\d+ \|/.test(line));
+		if (index === -1) throw new Error("fixture has no baseline row");
+		lines[index] = lines[index]!.replaceAll("`", "");
+		expect(validateSpec(lines.join("\n")).some(problem => problem.includes("no code evidence"))).toBe(true);
+	});
+
 	it("fails when acceptance criteria are missing", () => {
 		const text = fs
 			.readFileSync(SPEC_PATH, "utf8")
