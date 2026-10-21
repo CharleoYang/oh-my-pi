@@ -2,6 +2,7 @@ import { beforeAll, describe, expect, it } from "bun:test";
 import { Container, Text } from "@oh-my-pi/pi-tui";
 import { TranscriptContainer } from "@oh-my-pi/pi-tui/chrome/transcript-container";
 import { ReportPanel } from "@oh-my-pi/pi-tui/overlays/report-panel";
+import type { NativeUiEvent } from "@oh-my-pi/pi-tui/native/node";
 import { editorKey } from "@oh-my-pi/pi-tui/chrome/keybinding-hints";
 import { COMPOSER_DEFAULTS, Composer } from "@oh-my-pi/pi-tui/prompt/composer";
 import { initTheme } from "@oh-my-pi/pi-tui/theme";
@@ -68,6 +69,64 @@ async function mountReport(bodyRows: number) {
 }
 
 describe("ReportPanel in text mode", () => {
+	it("delegates Tab, tab shortcuts, delta and refresh keys to its interactive body", () => {
+		const keys: string[] = [];
+		const panel = new ReportPanel({
+			title: "Context",
+			body: {
+				render: () => ["body"],
+				handleInput: (data: string) => {
+					keys.push(data);
+					return true;
+				},
+			},
+			closeKey: "Esc",
+			onClose: () => {},
+		});
+		panel.holdFocus();
+
+		for (const key of ["\t", "1", "2", "3", "4", "d", "r"]) panel.handleInput(key);
+
+		expect(keys).toEqual(["\t", "1", "2", "3", "4", "d", "r"]);
+	});
+
+	it("consumes scrolling and Esc before the interactive body can handle them", () => {
+		const keys: string[] = [];
+		let closed = 0;
+		const panel = new ReportPanel({
+			title: "Context",
+			body: {
+				render: () => Array.from({ length: 40 }, (_, i) => `Entry ${i}`),
+				handleInput: (data: string) => {
+					keys.push(data);
+					return true;
+				},
+			},
+			closeKey: "Esc",
+			onClose: () => closed++,
+			maxRows: () => 10,
+		});
+		panel.holdFocus();
+		panel.render(80);
+		const scrollKeys = [
+			["\x1b[A", "line-up"],
+			["\x1b[B", "line-down"],
+			["\x1b[5~", "page-up"],
+			["\x1b[6~", "page-down"],
+			["\x1b[H", "start"],
+			["\x1b[F", "end"],
+		] as const;
+
+		for (const [index, [key, by]] of scrollKeys.entries()) {
+			panel.handleInput(key);
+			expect(panel.describe().c?.[0]).toMatchObject({ scroll: { by, n: index + 1 } });
+		}
+		expect(closed).toBe(0);
+		panel.handleInput("\x1b");
+		expect(closed).toBe(1);
+		expect(keys).toEqual([]);
+	});
+
 	it("grows up over the transcript to show a report that fits, without a scroll hint", async () => {
 		const h = await mountReport(30);
 		expect(h.entries()).toEqual(Array.from({ length: 30 }, (_, i) => i));
@@ -198,6 +257,33 @@ describe("ReportPanel in text mode", () => {
 });
 
 describe("ReportPanel natively", () => {
+	it("forwards native body events but handles Close without forwarding it", () => {
+		const events: NativeUiEvent[] = [];
+		let closed = 0;
+		const panel = new ReportPanel({
+			title: "Context",
+			body: {
+				render: () => ["body"],
+				handleNativeEvent: (event: NativeUiEvent) => events.push(event),
+			},
+			closeKey: "Esc",
+			onClose: () => closed++,
+		});
+		const bodyEvents: NativeUiEvent[] = [
+			{ type: "select", key: "body/tabs", item: "trend" },
+			{ type: "activate", key: "body/tabs", item: "files" },
+			{ type: "action", key: "body/refresh", act: "refresh", mods: [] },
+		];
+
+		for (const event of bodyEvents) panel.handleNativeEvent(event);
+		expect(events).toEqual(bodyEvents);
+		expect(closed).toBe(0);
+
+		panel.handleNativeEvent({ type: "action", key: "actions/close", act: "close", mods: [] });
+		expect(closed).toBe(1);
+		expect(events).toEqual(bodyEvents);
+	});
+
 	it("describes the report as the scrolled reading body, then Close, which closes it like Esc", () => {
 		let closed = 0;
 		const panel = new ReportPanel({
