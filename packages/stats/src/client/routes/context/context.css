@@ -50,7 +50,7 @@
 	font-size: 12px;
 }
 .context-detail-header strong {
-	color: var(--ink);
+	color: var(--ink-1);
 	font-family: var(--font-mono);
 	font-size: 15px;
 }
@@ -73,7 +73,7 @@
 }
 .context-tab:hover,
 .context-tab.active {
-	color: var(--ink);
+	color: var(--ink-1);
 	border-bottom-color: var(--context-accent);
 }
 .context-tab-stack,
@@ -108,7 +108,7 @@
 }
 .context-step.active {
 	border-color: var(--context-accent);
-	color: var(--ink);
+	color: var(--ink-1);
 	box-shadow: inset 0 0 0 1px var(--context-accent);
 }
 .context-waffle {
@@ -177,7 +177,7 @@
 .context-browser-step:hover,
 .context-browser-step.active {
 	background: var(--line-1);
-	color: var(--ink);
+	color: var(--ink-1);
 }
 .context-browser-step span,
 .context-browser-step strong {
@@ -211,7 +211,7 @@
 	margin-bottom: 10px;
 }
 .context-kind-chips .badge[data-active="true"] {
-	color: var(--ink);
+	color: var(--ink-1);
 	border-color: var(--context-accent);
 	background: color-mix(in srgb, var(--context-accent) 18%, var(--panel));
 }
@@ -251,4 +251,52 @@
 	.context-detail-header {
 		gap: 10px;
 	}
+}
+
+.context-delta-list {
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+	max-height: 420px;
+	overflow: auto;
+}
+.context-delta-row {
+	display: grid;
+	grid-template-columns: 52px 72px 1fr;
+	align-items: center;
+	gap: 8px;
+	width: 100%;
+	padding: 3px 6px;
+	border: 0;
+	background: transparent;
+	color: inherit;
+	text-align: left;
+	cursor: pointer;
+}
+.context-delta-row:hover {
+	background: var(--hover);
+}
+.context-delta-row.active {
+	background: var(--selected);
+}
+.context-delta-track {
+	position: relative;
+	height: 8px;
+	background: linear-gradient(
+		to right,
+		transparent 49.5%,
+		var(--line-3) 49.5%,
+		var(--line-3) 50.5%,
+		transparent 50.5%
+	);
+}
+.context-delta-fill {
+	position: absolute;
+	top: 0;
+	height: 100%;
+	background: var(--c2, #7885c9);
+	border-radius: 2px;
+}
+.context-delta-fill.negative {
+	background: var(--warning, #c49a54);
 }

@@ -44,14 +44,6 @@ export function ContextDetail({
 		setRootFile(file);
 		setDisplayFile(file);
 	}, [file]);
-	const currentStep = timeline
-		? Math.min(selected < 0 ? timeline.steps.length - 1 : selected, Math.max(0, timeline.steps.length - 1))
-		: 0;
-	const child = displayFile !== rootFile;
-	const selectAgent = (agent: ContextTimeline["agents"][number]) => {
-		if (agent.status !== "subagent" || !agent.file) return;
-		setDisplayFile(agent.file);
-	};
 	const tabs = useMemo(() => TABS.map(value => ({ value, label: value[0]!.toUpperCase() + value.slice(1) })), []);
 	if (timeline && timeline.schemaVersion !== 1) {
 		return (
@@ -63,6 +55,14 @@ export function ContextDetail({
 			</div>
 		);
 	}
+	const currentStep = timeline
+		? Math.min(selected < 0 ? timeline.steps.length - 1 : selected, Math.max(0, timeline.steps.length - 1))
+		: 0;
+	const child = displayFile !== rootFile;
+	const selectAgent = (agent: ContextTimeline["agents"][number]) => {
+		if (agent.status !== "subagent" || !agent.file) return;
+		setDisplayFile(agent.file);
+	};
 	return (
 		<div className="stack context-detail">
 			<PageHeader
