@@ -13,7 +13,27 @@ import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manage
 import { InputController } from "@oh-my-pi/pi-coding-agent/modes/controllers/input-controller";
 import { Text } from "@oh-my-pi/pi-tui";
 import { isNativeRendering, setNativeRendering } from "@oh-my-pi/pi-tui/native/state";
+import type { DescribeContext, NativeChild, NativeNode } from "@oh-my-pi/pi-tui/native/node";
 import { TempDir } from "@oh-my-pi/pi-utils";
+
+const describeContext: DescribeContext = {
+	cols: 120,
+	reduceMotion: false,
+	dark: true,
+	supports: () => true,
+	feature: () => true,
+};
+
+function findTabs(child: NativeChild | undefined): Extract<NativeNode, { k: "tabs" }> | undefined {
+	if (!child) return undefined;
+	if (!("k" in child)) return findTabs(child.describe?.(describeContext));
+	if (child.k === "tabs") return child;
+	for (const nested of child.c ?? []) {
+		const tabs = findTabs(nested);
+		if (tabs) return tabs;
+	}
+	return undefined;
+}
 
 describe("issue #4806 command output during streaming", () => {
 	let authStorage: AuthStorage;
@@ -97,6 +117,21 @@ describe("issue #4806 command output during streaming", () => {
 			mode.handleContextCommand();
 			expect(sheet()?.nativeOverlay).toMatchObject({ role: "omp.overlay.report", size: "lg" });
 			expect(mode.ui.getFocused()).toBe(sheet() ?? null);
+			expect(mode.ui.overlayStack).toHaveLength(1);
+			expect(findTabs(sheet())?.p?.active).toBe("overview");
+			// Focus stays on the report while Tab reaches the interactive body.
+			sheet()?.handleInput?.("\t");
+			expect(findTabs(sheet())?.p?.active).toBe("trend");
+			expect(mode.ui.getFocused()).toBe(sheet() ?? null);
+			const contextScroll = () =>
+				(sheet()?.describe?.(describeContext) as Described | undefined)?.c?.[0]?.scroll;
+			expect(contextScroll()).toBeUndefined();
+			sheet()?.handleInput?.("\x1b[6~");
+			expect(contextScroll()).toEqual({ by: "page-down", n: 1 });
+			expect(findTabs(sheet())?.p?.active).toBe("trend");
+			sheet()?.handleInput?.("\x1b[6~");
+			expect(contextScroll()).toEqual({ by: "page-down", n: 2 });
+			expect(findTabs(sheet())?.p?.active).toBe("trend");
 			expect(mode.chatContainer.children).toHaveLength(0);
 			expect(mode.reportContainer.children).toHaveLength(0);
 
