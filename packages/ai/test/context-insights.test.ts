@@ -291,6 +291,37 @@ describe("foldContextTimeline", () => {
 		expect(timeline.steps[0]?.eventIds).toEqual([]);
 	});
 
+	test("folds ast_edit multi-path calls and results", () => {
+		const timeline = foldContextTimeline(
+			input({
+				entries: [
+					assistant("a1", 1, 10, [
+						{
+							type: "toolCall",
+							id: "ast-1",
+							name: "ast_edit",
+							arguments: { ops: [{ pat: "old()", out: "new()" }], paths: ["src/a.ts", "src/b.ts"] },
+						},
+						{
+							type: "toolCall",
+							id: "ast-2",
+							name: "ast_edit",
+							arguments: { ops: [{ pat: "x", out: "y" }], paths: ["src/c.ts"] },
+						},
+					]),
+					toolResult("r1", 2, "ast-1", "ast_edit", {
+						files: ["src/a.ts", "src/b.ts"],
+						fileReplacements: [{ path: "src/b.ts", count: 2 }],
+					}),
+				],
+			}),
+		);
+		expect(timeline.files.map(file => file.path)).toEqual(["/work/src/a.ts", "/work/src/b.ts", "/work/src/c.ts"]);
+		expect(timeline.files.every(file => file.edits === 1)).toBe(true);
+		expect(timeline.steps[0]?.filePaths).toEqual(["/work/src/a.ts", "/work/src/b.ts", "/work/src/c.ts"]);
+		expect(timeline.incompleteFileCalls).toBe(1);
+	});
+
 	test("keeps cost across the step cap", () => {
 		const timeline = foldContextTimeline(
 			input({

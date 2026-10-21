@@ -4,6 +4,7 @@
 
 ### Fixed
 
+- Folded `ast_edit` multi-file calls and results into context file activity by resolving every requested path and the actual `files`/`fileReplacements` identities.
 - Kept SSE turn-state regression fixtures on their mocked HTTP transport rather than opening real WebSocket connections when run locally.
 - Made pending Codex WebSocket handshake regression coverage wait for socket construction instead of assuming authentication/header preparation finishes within 5 ms.
 - Fixed Factory Droid Core models (Kimi, GLM, DeepSeek and others) dropping calls to tools with names over 64 characters and their results from later requests; such names now shorten to 64 characters, and shorter names are sent unchanged ([#16384](https://github.com/can1357/oh-my-pi/pull/16384) by [@will-bogusz](https://github.com/will-bogusz))
