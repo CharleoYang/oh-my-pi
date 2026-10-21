@@ -1361,7 +1361,7 @@
 .context-fleet-main,
 .context-fleet-node {
 	border: 1px solid var(--line-2);
-	border-radius: 8px;
+	border-radius: var(--r-card);
 	background: var(--panel);
 	color: inherit;
 }
@@ -1585,7 +1585,7 @@
 	width: 26px;
 	height: 24px;
 	border: 1px solid var(--line-2);
-	border-radius: 5px;
+	border-radius: var(--r-chip);
 	background: transparent;
 	color: var(--ink-2);
 	cursor: pointer;
