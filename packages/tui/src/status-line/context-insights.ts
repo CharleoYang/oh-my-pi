@@ -148,6 +148,7 @@ export class ContextInsightsView extends Container {
 			return true;
 		}
 		if (matchesKey(data, "d")) {
+			if (this.#tabs.getActiveTab().id !== "trend") return false;
 			this.#deltaVisible = !this.#deltaVisible;
 			this.invalidate();
 			return true;

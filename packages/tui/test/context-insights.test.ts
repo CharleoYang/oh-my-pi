@@ -144,16 +144,24 @@ describe("ContextInsightsView", () => {
 		}
 		expect(v.handleInput("\x1b")).toBe(false);
 	});
-	it("toggles the Trend delta column without changing Overview", () => {
+	it("toggles the Trend delta column only while Trend is active", () => {
 		const v = view();
 		const overview = output(v);
-		v.handleInput("d");
-		expect(v.debugState().deltaVisible).toBe(true);
+		expect(v.handleInput("d")).toBe(false);
+		expect(v.debugState().deltaVisible).toBe(false);
 		expect(output(v)).toBe(overview);
 		v.handleInput("2");
+		expect(output(v)).not.toContain("Δ");
+		expect(v.handleInput("d")).toBe(true);
 		expect(output(v)).toContain("Δ");
 		expect(output(v)).toContain("-200");
-		v.handleInput("d");
+		for (const key of ["1", "3", "4"]) {
+			v.handleInput(key);
+			expect(v.handleInput("d")).toBe(false);
+			expect(v.debugState().deltaVisible).toBe(true);
+		}
+		v.handleInput("2");
+		expect(v.handleInput("d")).toBe(true);
 		expect(output(v)).not.toContain("Δ");
 		expect(output(v)).toContain("⟦c⟧");
 	});
