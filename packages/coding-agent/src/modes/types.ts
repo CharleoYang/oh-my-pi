@@ -588,11 +588,11 @@ export interface InteractiveModeContext {
 	hasActiveCleanse(): boolean;
 	handleCleanseEscape(): boolean;
 	/**
-	 * Show a read-only command report outside the transcript: above the editor
-	 * like `/btw` (a full-screen page when taller) in text mode, a `/usage`-style
-	 * sheet natively. Replaces the report already shown.
+	 * Show a command report outside the transcript: above the editor like `/btw`
+	 * (a full-screen page when taller or interactive) in text mode, a `/usage`-style
+	 * focused sheet natively. Replaces the report already shown.
 	 */
-	showCommandReport(options: { title: string; head?: TspText; body: Component }): void;
+	showCommandReport(options: { title: string; head?: TspText; body: Component; interactive?: boolean }): void;
 	/** The live background-jobs sheet (the jobs pill's). */
 	showJobsSheet(): void;
 	/** Clear the docked command report; false when none was shown (Esc falls through). */

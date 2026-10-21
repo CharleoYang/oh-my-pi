@@ -8966,7 +8966,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		return this.#cleanseController.handleEscape();
 	}
 
-	showCommandReport(options: { title: string; head?: TspText; body: Component }): void {
+	showCommandReport(options: { title: string; head?: TspText; body: Component; interactive?: boolean }): void {
 		this.#commandController.showCommandReport(options);
 	}
 

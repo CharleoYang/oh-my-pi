@@ -4,6 +4,7 @@
 
 ### Added
 
+- `/context` now opens a focused four-tab Context panel with Overview, Trend, Events, and Files, including keyboard navigation, optional deltas, and live history refresh. Interactive reports use a full-screen page in ANSI terminals even when short, while native terminals keep their focused sheet. Context history remains available without a selected model; non-TUI context reports are unchanged.
 - Focus mode (`/focus`, `display.focusMode`): the transcript shows prompts, final answers, and one clickable activity line per turn (`✻ N tools · M subagents`) while tool activity, thinking, and interim assistant messages are hidden until focus mode is turned off. Clicking a summary expands and folds that turn's hidden work in place; folded requests do not stack their own usage rows, so every turn keeps exactly one stats line. Tool visibility shortcuts explain that focus mode owns the toggle.
 
 ### Changed
