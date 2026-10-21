@@ -1,0 +1,310 @@
+{
+  "scope": {
+    "kind": "all_advancement"
+  },
+  "criteria": [
+    {
+      "id": "AC-01",
+      "validation_argv": [
+        "bun",
+        "test",
+        "packages/ai/test/context-insights.test.ts",
+        "packages/stats/test/session-context.test.ts"
+      ],
+      "validation_timeout_seconds": 300,
+      "description": "AC-01"
+    },
+    {
+      "id": "AC-02",
+      "validation_argv": [
+        "bun",
+        "test",
+        "packages/coding-agent/test/session/context-snapshot-details.test.ts",
+        "packages/coding-agent/test/session/context-snapshot-request-boundary.test.ts"
+      ],
+      "validation_timeout_seconds": 300,
+      "description": "AC-02"
+    },
+    {
+      "id": "AC-03",
+      "validation_argv": [
+        "bun",
+        "test",
+        "packages/tui/test/context-insights.test.ts",
+        "packages/tui/test/report-panel.test.ts",
+        "packages/coding-agent/test/command-report-text-mode.test.ts"
+      ],
+      "validation_timeout_seconds": 300,
+      "description": "AC-03"
+    },
+    {
+      "id": "AC-04",
+      "validation_argv": [
+        "bun",
+        "test",
+        "packages/stats/test/context-overview.test.ts",
+        "packages/stats/test/context-ui.test.tsx"
+      ],
+      "validation_timeout_seconds": 300,
+      "description": "AC-04"
+    },
+    {
+      "id": "AC-05",
+      "validation_argv": [
+        "bun",
+        "test",
+        "packages/stats/test/session-context.test.ts",
+        "packages/stats/test/context-ui.test.tsx"
+      ],
+      "validation_timeout_seconds": 300,
+      "description": "AC-05"
+    },
+    {
+      "id": "AC-06",
+      "validation_argv": [
+        "bun",
+        "test",
+        "packages/coding-agent/test/context-insights-e2e.test.ts"
+      ],
+      "validation_timeout_seconds": 300,
+      "description": "AC-06"
+    },
+    {
+      "id": "AC-07",
+      "validation_argv": [
+        "bun",
+        "test",
+        "packages/ai/test/context-insights.test.ts",
+        "packages/stats/test/session-context.test.ts"
+      ],
+      "validation_timeout_seconds": 300,
+      "description": "AC-07"
+    },
+    {
+      "id": "AC-08",
+      "validation_argv": [
+        "bun",
+        "test",
+        "packages/coding-agent/test/context-insights-live-e2e.test.ts"
+      ],
+      "validation_timeout_seconds": 300,
+      "description": "AC-08"
+    },
+    {
+      "id": "AC-09",
+      "validation_argv": [
+        "bun",
+        "run",
+        "--cwd",
+        "packages/coding-agent",
+        "check"
+      ],
+      "validation_timeout_seconds": 300,
+      "description": "AC-09"
+    }
+  ],
+  "objective": "Deliver the context insights feature across TUI, HTTP and Web with shared parity, bounded payloads, and no installed-omp replacement.",
+  "non_goals": [
+    "Installing or replacing the installed omp binary without explicit user approval",
+    "Adding a new chart library",
+    "Unbounded prompt/message body persistence"
+  ],
+  "bindings": [
+    {
+      "todo_id": "todo_348140ed01f6f76bbdc3093e",
+      "criterion_ids": [
+        "AC-01",
+        "AC-02",
+        "AC-03",
+        "AC-04",
+        "AC-05",
+        "AC-06",
+        "AC-07",
+        "AC-08",
+        "AC-09"
+      ]
+    },
+    {
+      "todo_id": "todo_3f04b5c190fa272ad8348743",
+      "criterion_ids": [
+        "AC-01",
+        "AC-02",
+        "AC-03",
+        "AC-04",
+        "AC-05",
+        "AC-06",
+        "AC-07",
+        "AC-08",
+        "AC-09"
+      ]
+    },
+    {
+      "todo_id": "todo_43445f9157f0190b7e3983dd",
+      "criterion_ids": [
+        "AC-01",
+        "AC-02",
+        "AC-03",
+        "AC-04",
+        "AC-05",
+        "AC-06",
+        "AC-07",
+        "AC-08",
+        "AC-09"
+      ]
+    },
+    {
+      "todo_id": "todo_7b273ec99931d9e0dbc73336",
+      "criterion_ids": [
+        "AC-01",
+        "AC-02",
+        "AC-03",
+        "AC-04",
+        "AC-05",
+        "AC-06",
+        "AC-07",
+        "AC-08",
+        "AC-09"
+      ]
+    },
+    {
+      "todo_id": "todo_8d303fcca64239733430491b",
+      "criterion_ids": [
+        "AC-01",
+        "AC-02",
+        "AC-03",
+        "AC-04",
+        "AC-05",
+        "AC-06",
+        "AC-07",
+        "AC-08",
+        "AC-09"
+      ]
+    },
+    {
+      "todo_id": "todo_91643c2017758cb19da5b666",
+      "criterion_ids": [
+        "AC-01",
+        "AC-02",
+        "AC-03",
+        "AC-04",
+        "AC-05",
+        "AC-06",
+        "AC-07",
+        "AC-08",
+        "AC-09"
+      ]
+    },
+    {
+      "todo_id": "todo_992b6ded0e6a02afb64250d9",
+      "criterion_ids": [
+        "AC-01",
+        "AC-02",
+        "AC-03",
+        "AC-04",
+        "AC-05",
+        "AC-06",
+        "AC-07",
+        "AC-08",
+        "AC-09"
+      ]
+    },
+    {
+      "todo_id": "todo_a45d097f8868f8f9b521edc2",
+      "criterion_ids": [
+        "AC-01",
+        "AC-02",
+        "AC-03",
+        "AC-04",
+        "AC-05",
+        "AC-06",
+        "AC-07",
+        "AC-08",
+        "AC-09"
+      ]
+    },
+    {
+      "todo_id": "todo_b7c5d2f77f41ae655d40a580",
+      "criterion_ids": [
+        "AC-01",
+        "AC-02",
+        "AC-03",
+        "AC-04",
+        "AC-05",
+        "AC-06",
+        "AC-07",
+        "AC-08",
+        "AC-09"
+      ]
+    },
+    {
+      "todo_id": "todo_c7122036c5313b23ad7b140a",
+      "criterion_ids": [
+        "AC-01",
+        "AC-02",
+        "AC-03",
+        "AC-04",
+        "AC-05",
+        "AC-06",
+        "AC-07",
+        "AC-08",
+        "AC-09"
+      ]
+    },
+    {
+      "todo_id": "todo_cc93870c60586a5b4663ad77",
+      "criterion_ids": [
+        "AC-01",
+        "AC-02",
+        "AC-03",
+        "AC-04",
+        "AC-05",
+        "AC-06",
+        "AC-07",
+        "AC-08",
+        "AC-09"
+      ]
+    },
+    {
+      "todo_id": "todo_d8135d120d7f1e123ffb1958",
+      "criterion_ids": [
+        "AC-01",
+        "AC-02",
+        "AC-03",
+        "AC-04",
+        "AC-05",
+        "AC-06",
+        "AC-07",
+        "AC-08",
+        "AC-09"
+      ]
+    },
+    {
+      "todo_id": "todo_f8800da6f6ad768771db809a",
+      "criterion_ids": [
+        "AC-01",
+        "AC-02",
+        "AC-03",
+        "AC-04",
+        "AC-05",
+        "AC-06",
+        "AC-07",
+        "AC-08",
+        "AC-09"
+      ]
+    },
+    {
+      "todo_id": "todo_fff299f55799bbe1494f6bba",
+      "criterion_ids": [
+        "AC-01",
+        "AC-02",
+        "AC-03",
+        "AC-04",
+        "AC-05",
+        "AC-06",
+        "AC-07",
+        "AC-08",
+        "AC-09"
+      ]
+    }
+  ]
+}
