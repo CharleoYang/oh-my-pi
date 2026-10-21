@@ -5,21 +5,149 @@
  * without dragging server dependencies into its bundle.
  */
 
-export type {
-	ContextAgentUsage,
-	ContextCategoryId,
-	ContextCategoryTokens,
-	ContextEvent,
-	ContextEventKind,
-	ContextFileActivity,
-	ContextNamedTokens,
-	ContextSnapshotDetails,
-	ContextStep,
-	ContextStepDetails,
-	ContextStepUsage,
-	ContextTimeline,
-	ContextTimelineLimits,
-} from "@oh-my-pi/pi-ai";
+/** Per-category token attribution for one request. */
+export type ContextCategoryId = "systemPrompt" | "systemTools" | "systemContext" | "skills" | "messages";
+
+export interface ContextCategoryTokens {
+	systemPrompt: number;
+	systemTools: number;
+	systemContext: number;
+	skills: number;
+	messages: number;
+}
+
+export interface ContextNamedTokens {
+	name: string;
+	tokens: number;
+}
+
+export interface ContextSnapshotDetails {
+	contextWindow: number;
+	categories: ContextCategoryTokens;
+	toolSchemas?: ContextNamedTokens[];
+	omittedToolSchemas?: number;
+	skills?: ContextNamedTokens[];
+	omittedSkills?: number;
+	systemPromptParts?: number[];
+	systemPromptPartsOmitted?: number;
+	messageCount: number;
+	pendingMessageTokens: number;
+}
+
+export interface ContextStepDetails {
+	contextWindow: number;
+	categories: ContextCategoryTokens;
+	toolSchemas?: ContextNamedTokens[];
+	omittedToolSchemas?: number;
+	skills?: ContextNamedTokens[];
+	omittedSkills?: number;
+	systemPromptParts?: number[];
+	systemPromptPartsOmitted?: number;
+	messageCount: number;
+	pendingMessageTokens: number;
+}
+
+export interface ContextStepUsage {
+	input: number;
+	output: number;
+	cacheRead: number;
+	cacheWrite: number;
+	total: number;
+	costTotal?: number;
+}
+
+export interface ContextStep {
+	id: string;
+	index: number;
+	timestamp: number;
+	model?: string;
+	provider?: string;
+	promptTokens: number;
+	anchored: boolean;
+	composition?: ContextCategoryTokens;
+	compositionEstimated?: boolean;
+	details?: ContextStepDetails;
+	unattributed?: number;
+	contextWindow?: number;
+	deltaTokens?: number;
+	deltaKind: "first" | "grow" | "shrink" | "compaction" | "reset" | "model-switch";
+	usage?: ContextStepUsage;
+	eventIds: string[];
+	filePaths: string[];
+}
+
+export type ContextEventKind = "inject" | "compact" | "prune" | "switch" | "mode" | "reset" | "branch";
+
+export interface ContextEvent {
+	id: string;
+	timestamp: number;
+	kind: ContextEventKind;
+	label: string;
+	detail?: string;
+	tokensBefore?: number;
+	tokensAfter?: number;
+	source?: string;
+	inferred?: boolean;
+	stepIndex?: number;
+}
+
+export interface ContextFileActivity {
+	path: string;
+	reads: number;
+	writes: number;
+	edits: number;
+	searches: number;
+	linesRead: number;
+	linesAdded: number;
+	linesRemoved: number;
+	bytesRead: number;
+	bytesWritten: number;
+	lastTimestamp: number;
+}
+
+export interface ContextAgentUsage {
+	trackId: string;
+	label: string;
+	agent?: string;
+	model?: string;
+	requests: number;
+	peakTokens: number;
+	lastTokens?: number;
+	costTotal?: number;
+	status: "main" | "subagent" | "advisor";
+}
+
+export interface ContextTimeline {
+	schemaVersion: 1;
+	sessionId: string;
+	file?: string;
+	cwd?: string;
+	source: "live" | "journal";
+	steps: ContextStep[];
+	omittedSteps: number;
+	detailsOmittedSteps: number;
+	composition?: ContextCategoryTokens;
+	contextWindow?: number;
+	peakTokens: number;
+	events: ContextEvent[];
+	omittedEvents: number;
+	files: ContextFileActivity[];
+	omittedFiles: number;
+	incompleteFileCalls: number;
+	agents: ContextAgentUsage[];
+	legacySteps: number;
+	truncated: boolean;
+}
+
+export interface ContextTimelineLimits {
+	maxSteps: number;
+	maxEvents: number;
+	maxFiles: number;
+	maxBrowserEntries: number;
+	maxToolSchemas: number;
+	maxSkills: number;
+	maxSystemParts: number;
+}
 
 /** Bounded ranges supported by the context overview. */
 export type TimeRange = "1h" | "24h" | "7d" | "30d" | "90d";
