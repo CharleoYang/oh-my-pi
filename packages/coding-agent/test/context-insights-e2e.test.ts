@@ -23,7 +23,15 @@ import {
 } from "@oh-my-pi/pi-coding-agent/tools/browser/launch";
 import { Composer } from "@oh-my-pi/pi-tui/prompt/composer";
 import { initTheme } from "@oh-my-pi/pi-tui/theme";
-import { getAgentDir, getPuppeteerDir, getSessionsDir, getStatsDbPath, setAgentDir, TempDir } from "@oh-my-pi/pi-utils";
+import {
+	__resetDirsFromEnvForTests,
+	getAgentDir,
+	getPuppeteerDir,
+	getSessionsDir,
+	getStatsDbPath,
+	setAgentDir,
+	TempDir,
+} from "@oh-my-pi/pi-utils";
 import { contextSessionFixture } from "../../ai/test/fixtures/context-session";
 import { VirtualTerminal } from "../../tui/test/virtual-terminal";
 
@@ -44,6 +52,9 @@ async function installedFingerprint() {
 
 const ENV_KEYS = [
 	"PI_CONFIG_DIR",
+	"PI_CODING_AGENT_DIR",
+	"OMP_PROFILE",
+	"PI_PROFILE",
 	"PI_SESSION_FILE",
 	"PI_SESSION_ID",
 	"XDG_DATA_HOME",
@@ -114,7 +125,7 @@ describe("context insights source-only cross-surface E2E", () => {
 				if (value === undefined) delete process.env[key];
 				else process.env[key] = value;
 			}
-			if (oldAgentDir) setAgentDir(oldAgentDir);
+			__resetDirsFromEnvForTests();
 			temp?.removeSync();
 			resetSettingsForTest();
 			expect(await installedFingerprint()).toEqual(installedBefore);
