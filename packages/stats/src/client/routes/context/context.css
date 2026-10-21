@@ -1410,7 +1410,7 @@
 
 .context-fleet-agent,
 .context-fleet-model {
-	color: var(--muted);
+	color: var(--ink-2);
 	font-size: 11px;
 }
 
@@ -1424,14 +1424,14 @@
 	display: grid;
 	grid-template-columns: repeat(3, minmax(0, 1fr));
 	gap: 8px;
-	font-family: var(--mono);
+	font-family: var(--font-mono);
 	font-size: 12px;
 }
 
 .context-fleet-values small {
 	display: block;
-	color: var(--muted);
-	font-family: var(--font);
+	color: var(--ink-2);
+	font-family: var(--font-sans);
 	font-size: 10px;
 }
 
@@ -1479,7 +1479,7 @@
 .context-file-legend {
 	display: flex;
 	gap: 8px;
-	color: var(--muted);
+	color: var(--ink-2);
 	font-size: 10px;
 }
 
@@ -1525,7 +1525,7 @@
 	min-width: 0;
 	overflow: hidden;
 	text-overflow: ellipsis;
-	color: var(--muted);
+	color: var(--ink-2);
 }
 
 .context-file-name {
@@ -1533,7 +1533,7 @@
 	max-width: 62%;
 	overflow: hidden;
 	text-overflow: ellipsis;
-	color: var(--fg);
+	color: var(--ink-1);
 	font-weight: 600;
 }
 
@@ -1587,14 +1587,14 @@
 	border: 1px solid var(--line-2);
 	border-radius: 5px;
 	background: transparent;
-	color: var(--muted);
+	color: var(--ink-2);
 	cursor: pointer;
 }
 
 .context-file-open:hover,
 .context-file-open:focus-visible {
 	border-color: var(--context-accent);
-	color: var(--fg);
+	color: var(--ink-1);
 }
 
 .context-browser-actions {
