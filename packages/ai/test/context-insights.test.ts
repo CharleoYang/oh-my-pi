@@ -317,7 +317,11 @@ describe("foldContextTimeline", () => {
 			}),
 		);
 		expect(timeline.files.map(file => file.path)).toEqual(["/work/src/a.ts", "/work/src/b.ts", "/work/src/c.ts"]);
-		expect(timeline.files.every(file => file.edits === 1)).toBe(true);
+		expect(Object.fromEntries(timeline.files.map(file => [file.path, file.edits]))).toEqual({
+			"/work/src/a.ts": 1,
+			"/work/src/b.ts": 1,
+			"/work/src/c.ts": 1,
+		});
 		expect(timeline.steps[0]?.filePaths).toEqual(["/work/src/a.ts", "/work/src/b.ts", "/work/src/c.ts"]);
 		expect(timeline.incompleteFileCalls).toBe(1);
 	});
@@ -339,18 +343,33 @@ describe("foldContextTimeline", () => {
 							name: "ast_edit",
 							arguments: { ops: [], paths: ["src/*.ts"] },
 						},
+						{
+							type: "toolCall",
+							id: "ast-glob-2",
+							name: "ast_edit",
+							arguments: { ops: [], paths: ["src/*.ts"] },
+						},
 					]),
 					toolResult("r1", 2, "ast-dup", "ast_edit", { files: ["src/a.ts"] }),
 					toolResult("r2", 2, "ast-glob", "ast_edit", {
 						files: ["src/x.ts", "src/y.ts"],
 						fileReplacements: [{ path: "src/y.ts", count: 1 }],
 					}),
+					toolResult("r3", 2, "ast-glob-2", "ast_edit", { files: ["src/x.ts"] }),
 				],
 			}),
 		);
-		expect(timeline.files.map(file => file.path)).toEqual(["/work/src/a.ts", "/work/src/x.ts", "/work/src/y.ts"]);
-		expect(timeline.files.every(file => file.edits === 1)).toBe(true);
-		expect(timeline.steps[0]?.filePaths).toEqual(["/work/src/a.ts", "/work/src/x.ts", "/work/src/y.ts"]);
+		expect(timeline.files.map(file => file.path).sort()).toEqual([
+			"/work/src/a.ts",
+			"/work/src/x.ts",
+			"/work/src/y.ts",
+		]);
+		expect(Object.fromEntries(timeline.files.map(file => [file.path, file.edits]))).toEqual({
+			"/work/src/a.ts": 1,
+			"/work/src/x.ts": 2,
+			"/work/src/y.ts": 1,
+		});
+		expect(timeline.steps[0]?.filePaths.sort()).toEqual(["/work/src/a.ts", "/work/src/x.ts", "/work/src/y.ts"]);
 		expect(timeline.incompleteFileCalls).toBe(0);
 	});
 

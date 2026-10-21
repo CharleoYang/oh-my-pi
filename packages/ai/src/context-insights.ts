@@ -592,14 +592,7 @@ export function foldContextTimeline(input: ContextTimelineInput): ContextTimelin
 									provisional.bytesWritten === 0;
 								if (empty) files.delete(requested);
 							}
-							const owner = call.owner;
-							const usedElsewhere = [...pendingCalls.values()].some(
-								other =>
-									other !== call &&
-									other.owner === owner &&
-									(other.path === requested || other.paths?.includes(requested)),
-							);
-							if (!usedElsewhere) owner?.filePaths.delete(requested);
+							call.owner?.filePaths.delete(requested);
 						}
 					}
 					for (const target of actual) {
@@ -608,6 +601,9 @@ export function foldContextTimeline(input: ContextTimelineInput): ContextTimelin
 							call.owner?.filePaths.add(target);
 						}
 					}
+					// The result has reconciled this call's selectors; earlier calls
+					// processing the same selector must not treat this call as still using it.
+					if (actual.size > 0) call.paths = undefined;
 				} else if (call.name === "edit") {
 					const perFile = asArray(resultDetails?.perFileResults);
 					if (perFile.length > 0) {

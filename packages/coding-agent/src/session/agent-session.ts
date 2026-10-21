@@ -8738,34 +8738,6 @@ export class AgentSession implements SettingsScope {
 			}
 
 			const agentPromptOptions = options?.toolChoice ? { toolChoice: options.toolChoice } : undefined;
-			const nonMessageTokens = computeNonMessageTokens(this, this.agent.tokenizer, this.settings.revision);
-			const contextWindow = this.model?.contextWindow ?? 0;
-			const breakdown = this.getContextBreakdown({ contextWindow, pendingMessages: messages });
-			const promptTokens =
-				breakdown?.usedTokens ??
-				nonMessageTokens +
-					this.agent.tokenizer.countMessages(this.messages) +
-					this.agent.tokenizer.countMessages(messages);
-			const details = breakdown
-				? captureContextSnapshotDetails({
-						breakdown,
-						contextWindow,
-						systemPrompt: this.systemPrompt,
-						tools: this.agent.state.tools,
-						skills: this.renderedSkills,
-						model: this.model,
-						tokenizer: this.agent.tokenizer,
-						sourceRevision: this.settings.revision,
-						messageCount: this.messages.length + messages.length,
-						pendingMessages: messages,
-					})
-				: undefined;
-			this.#stats.setPendingSnapshot({
-				promptTokens,
-				nonMessageTokens,
-				cutoffCount: this.messages.length + messages.length,
-				...(details ? { details } : {}),
-			});
 			// Commit the plan-reference delivery flag only now that the message is
 			// actually handed to agent.prompt. Every pre-send setup step above can
 			// return (generation-bail) or throw (@-mention reads, before_agent_start
