@@ -26,7 +26,7 @@ export interface ReportPanelOptions {
 	readonly title: string;
 	/** Styled native sheet head. */
 	readonly head?: TspText;
-	/** The read-only report; it draws no frame or title of its own. */
+	/** Report content; the panel handles scrolling and closing before forwarding other input. */
 	readonly body: Component;
 	/**
 	 * Display form of the key that dismisses the report while it sits above the
@@ -49,7 +49,7 @@ export interface ReportPanelOptions {
 const TEXT_CHROME_ROWS = 5;
 
 /**
- * A read-only command report (`/changelog`, `/context`, `/tools`, …).
+ * A command report (`/changelog`, `/context`, `/tools`, …).
  *
  * Text mode draws a titled box with the body and an Esc hint: above the editor
  * like the `/btw` panel while it fits there (the editor keeps focus and its
@@ -150,7 +150,8 @@ export class ReportPanel extends OverlayPanel {
 
 	/**
 	 * Focused (the native sheet, or the text-mode full-screen page): Esc closes;
-	 * the arrow, page, Home and End keys and the wheel scroll the body.
+	 * the arrow, page, Home and End keys and the wheel scroll the body. Other
+	 * input is delegated to the report body for its own interactive controls.
 	 */
 	handleInput(data: string): void {
 		if (
@@ -179,17 +180,25 @@ export class ReportPanel extends OverlayPanel {
 							: matchesKey(data, "end")
 								? "end"
 								: undefined;
-		if (by === undefined) return;
-		// Natively the terminal scrolls the sheet body; text mode scrolls the box.
-		this.#scroll = { by, n: (this.#scroll?.n ?? 0) + 1 };
-		const page = Math.max(1, this.#bodyRows - 1);
-		if (by === "start") this.#view.scrollToTop();
-		else if (by === "end") this.#view.scrollToBottom();
-		else this.#view.scroll(by === "line-up" ? -1 : by === "line-down" ? 1 : by === "page-up" ? -page : page);
+		if (by !== undefined) {
+			// Natively the terminal scrolls the sheet body; text mode scrolls the box.
+			this.#scroll = { by, n: (this.#scroll?.n ?? 0) + 1 };
+			const page = Math.max(1, this.#bodyRows - 1);
+			if (by === "start") this.#view.scrollToTop();
+			else if (by === "end") this.#view.scrollToBottom();
+			else this.#view.scroll(by === "line-up" ? -1 : by === "line-down" ? 1 : by === "page-up" ? -page : page);
+			return;
+		}
+		const body = this.#body as { handleInput?: (data: string) => boolean | void };
+		if (body.handleInput?.(data) === true) return;
 	}
 
-	/** Close runs what Esc runs. */
+	/** Close runs what Esc runs; other native actions belong to the report body. */
 	handleNativeEvent(event: NativeUiEvent): void {
-		if (event.type === "action" && event.act === "close") this.#onClose();
+		if (event.type === "action" && event.act === "close") {
+			this.#onClose();
+			return;
+		}
+		this.#body.handleNativeEvent?.(event);
 	}
 }

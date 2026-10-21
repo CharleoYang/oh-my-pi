@@ -48,7 +48,8 @@ import { MoveOverlay, type MoveOverlayResult } from "@oh-my-pi/pi-tui/overlays/m
 import { moveDirectorySource } from "../move-directory-source";
 import { getMarkdownTheme, getSymbolTheme, theme, type Theme } from "@oh-my-pi/pi-tui/theme";
 import type { InteractiveModeContext } from "../../modes/types";
-import { ContextUsageView, contextUsageHead } from "@oh-my-pi/pi-tui/status-line/context-usage";
+import { ContextInsightsView, TUI_CONTEXT_TIMELINE_LIMITS } from "@oh-my-pi/pi-tui/status-line/context-insights";
+import { contextUsageHead } from "@oh-my-pi/pi-tui/status-line/context-usage";
 import type { OverlayHandle } from "@oh-my-pi/pi-tui";
 import { ReportPanel } from "@oh-my-pi/pi-tui/overlays/report-panel";
 import type { TspText } from "@oh-my-pi/pi-wire";
@@ -240,18 +241,19 @@ export class CommandController {
 	}
 
 	/**
-	 * Show a read-only report, replacing the previous one. In text mode one that
-	 * fits the rows above the editor shows there like `/btw`: the editor keeps
-	 * focus and its Esc takes the report away. A taller one opens as a
+	 * Show a command report, replacing the previous one. In text mode a non-interactive
+	 * report that fits the rows above the editor shows there like `/btw`: the editor
+	 * keeps focus and its Esc takes the report away. Taller or interactive reports open as a
 	 * full-screen page on the terminal's alternate screen, scrolled with the
 	 * arrow/page keys and the wheel, so the main screen is never touched and
 	 * Esc returns to it as it was. Natively it is a focused sheet like
 	 * `/usage`, its body scrolled by the terminal once it is long, closed by
 	 * Esc or Close.
 	 */
-	showCommandReport(options: { title: string; head?: TspText; body: Component }): void {
+	showCommandReport(options: { title: string; head?: TspText; body: Component; interactive?: boolean }): void {
 		this.#clearReport();
 		this.#closeReportSheet();
+		const interactive = options.interactive === true;
 		const terminal = this.ctx.ui.terminal;
 		const inline = this.ctx.commandReportRows() ?? terminal.rows;
 		let fullScreen = false;
@@ -265,7 +267,7 @@ export class CommandController {
 			report.holdFocus();
 			this.#reportSheet = this.ctx.ui.showOverlay(report, { anchor: "center", width: "90%", maxHeight: "90%" });
 			this.ctx.ui.setFocus(report);
-		} else if (report.heightAt(terminal.columns) > inline) {
+		} else if (interactive || report.heightAt(terminal.columns) > inline) {
 			fullScreen = true;
 			report.holdFocus();
 			this.#reportSheet = this.ctx.ui.showOverlay(report, {
@@ -955,15 +957,17 @@ export class CommandController {
 
 	handleContextCommand(): void {
 		const breakdown = computeSessionContextBreakdown(this.ctx.session, { snapcompactSavings: true });
-		if (breakdown.contextWindow <= 0) {
-			this.ctx.showWarning("Context usage is unavailable: no model is selected for this session.");
-			return;
-		}
-		// Natively the body is `/context`'s own card (meters, legend, compaction mark).
+		const timeline = this.ctx.session.getContextTimeline({ limits: TUI_CONTEXT_TIMELINE_LIMITS });
 		this.showCommandReport({
-			title: "Context Usage",
+			title: "Context",
 			head: contextUsageHead(breakdown),
-			body: new ContextUsageView(breakdown, theme),
+			interactive: true,
+			body: new ContextInsightsView({
+				timeline,
+				breakdown,
+				theme,
+				onRefresh: () => this.ctx.session.getContextTimeline({ limits: TUI_CONTEXT_TIMELINE_LIMITS }),
+			}),
 		});
 	}
 

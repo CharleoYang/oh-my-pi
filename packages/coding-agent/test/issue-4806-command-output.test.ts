@@ -24,7 +24,7 @@ const describeContext: DescribeContext = {
 	feature: () => true,
 };
 
-function findTabs(child: NativeChild | undefined): Extract<NativeNode, { k: "tabs" }> | undefined {
+function findTabs(child: NativeChild | null | undefined): Extract<NativeNode, { k: "tabs" }> | undefined {
 	if (!child) return undefined;
 	if (!("k" in child)) return findTabs(child.describe?.(describeContext));
 	if (child.k === "tabs") return child;
@@ -123,8 +123,7 @@ describe("issue #4806 command output during streaming", () => {
 			sheet()?.handleInput?.("\t");
 			expect(findTabs(sheet())?.p?.active).toBe("trend");
 			expect(mode.ui.getFocused()).toBe(sheet() ?? null);
-			const contextScroll = () =>
-				(sheet()?.describe?.(describeContext) as Described | undefined)?.c?.[0]?.scroll;
+			const contextScroll = () => (sheet()?.describe?.(describeContext) as Described | undefined)?.c?.[0]?.scroll;
 			expect(contextScroll()).toBeUndefined();
 			sheet()?.handleInput?.("\x1b[6~");
 			expect(contextScroll()).toEqual({ by: "page-down", n: 1 });
