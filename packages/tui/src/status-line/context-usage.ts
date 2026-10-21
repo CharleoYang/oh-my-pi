@@ -1,7 +1,7 @@
 import type { AgentMessage, Tokenizer } from "@oh-my-pi/pi-agent-core";
 import type { CompactionSettings } from "@oh-my-pi/pi-agent-core/compaction";
 import { effectiveReserveTokens, resolveThresholdTokens } from "@oh-my-pi/pi-agent-core/compaction";
-import type { Tool as AiTool, Model } from "@oh-my-pi/pi-ai";
+import type { ContextNamedTokens, Tool as AiTool, Model } from "@oh-my-pi/pi-ai";
 import { renderToolExamples } from "@oh-my-pi/pi-ai/dialect";
 import { toolWireSchema } from "@oh-my-pi/pi-ai/utils/schema";
 import { formatNumber } from "@oh-my-pi/pi-utils";
@@ -234,38 +234,42 @@ export function invalidateToolSchemaMetadata(tools: ToolSchemaSource): void {
  * must either advance `sourceRevision` or call
  * {@link invalidateToolSchemaMetadata} when those inputs change.
  */
+function toolSchemaFragments(tool: ContextTool): string[] {
+	// Extension-supplied tools may carry a non-string name/description or a
+	// parameters value whose wire schema stringifies to `undefined` (e.g. a
+	// callable schema that escaped normalization). A non-string fragment is
+	// fatal inside the native tokenizer, so only real strings are counted.
+	const fragments: string[] = [];
+	const name = tool.name;
+	const description = tool.description;
+	const parameters = tool.parameters;
+	if (typeof name === "string") fragments.push(name);
+	if (typeof description === "string") fragments.push(description);
+	try {
+		const wireTool: AiTool = {
+			name,
+			description,
+			parameters: parameters as AiTool["parameters"],
+			examples: tool.examples,
+		};
+		const wireJson = JSON.stringify(toolWireSchema(wireTool) ?? {});
+		if (typeof wireJson === "string") fragments.push(wireJson);
+		// The agent loop appends rendered examples to the wire description.
+		const examplesBlock = renderToolExamples(wireTool);
+		if (examplesBlock) fragments.push(examplesBlock);
+	} catch {
+		// Schema may contain functions or cycles; ignore.
+	}
+	return fragments;
+}
+
 export function estimateToolSchemaTokens(tools: ToolSchemaSource, tokenizer: Tokenizer, sourceRevision = 0): number {
 	const cache = toolSchemaTokenCache(tools);
 	const cached = cache.byTokenizer.get(tokenizer);
 	if (cached?.revision === cache.revision && cached.sourceRevision === sourceRevision) return cached.tokens;
 
 	const fragments: string[] = [];
-	for (const tool of tools) {
-		// Extension-supplied tools may carry a non-string name/description or a
-		// parameters value whose wire schema stringifies to `undefined` (e.g. a
-		// callable schema that escaped normalization). A non-string fragment is
-		// fatal inside the native tokenizer, so only real strings are counted.
-		const name = tool.name;
-		const description = tool.description;
-		const parameters = tool.parameters;
-		if (typeof name === "string") fragments.push(name);
-		if (typeof description === "string") fragments.push(description);
-		try {
-			const wireTool: AiTool = {
-				name,
-				description,
-				parameters: parameters as AiTool["parameters"],
-				examples: tool.examples,
-			};
-			const wireJson = JSON.stringify(toolWireSchema(wireTool) ?? {});
-			if (typeof wireJson === "string") fragments.push(wireJson);
-			// The agent loop appends rendered examples to the wire description.
-			const examplesBlock = renderToolExamples(wireTool);
-			if (examplesBlock) fragments.push(examplesBlock);
-		} catch {
-			// Schema may contain functions or cycles; ignore.
-		}
-	}
+	for (const tool of tools) fragments.push(...toolSchemaFragments(tool));
 	const tokens = tokenizer.countTokens(fragments);
 	cache.byTokenizer.set(tokenizer, { revision: cache.revision, sourceRevision, tokens });
 	return tokens;
@@ -279,6 +283,59 @@ export function estimateContextToolSchemaTokens(
 	sourceRevision = 0,
 ): number {
 	return model?.toolSchemasInContext === false ? 0 : estimateToolSchemaTokens(tools, tokenizer, sourceRevision);
+}
+
+interface ToolByToolCacheEntry {
+	byTokenizer: WeakMap<
+		Tokenizer,
+		{ revision: number; sourceRevision: number; schemaPolicy: boolean; items: ContextNamedTokens[] }
+	>;
+}
+
+const TOOL_BY_TOOL_CACHE = new WeakMap<ToolSchemaSource, ToolByToolCacheEntry>();
+
+/** Per-tool schema token estimates for persisted context details. Not normalized. */
+export function estimateContextToolSchemaTokensByTool(
+	tools: ToolSchemaSource,
+	tokenizer: Tokenizer,
+	model: Model | undefined,
+	sourceRevision = 0,
+): ContextNamedTokens[] {
+	const schemaPolicy = model?.toolSchemasInContext !== false;
+	if (!schemaPolicy) return [];
+	let cache = TOOL_BY_TOOL_CACHE.get(tools);
+	if (!cache) {
+		cache = { byTokenizer: new WeakMap() };
+		TOOL_BY_TOOL_CACHE.set(tools, cache);
+	}
+	const revision = getToolSchemaMetadataRevision(tools);
+	const cached = cache.byTokenizer.get(tokenizer);
+	if (
+		cached &&
+		cached.revision === revision &&
+		cached.sourceRevision === sourceRevision &&
+		cached.schemaPolicy === schemaPolicy
+	) {
+		return cached.items;
+	}
+	const items = tools
+		.map(tool => ({ name: tool.name, tokens: tokenizer.countTokens(toolSchemaFragments(tool)) }))
+		.sort((a, b) => b.tokens - a.tokens || a.name.localeCompare(b.name));
+	cache.byTokenizer.set(tokenizer, { revision, sourceRevision, schemaPolicy, items });
+	return items;
+}
+
+/** Per-skill token estimates for persisted context details. Not normalized. */
+export function estimateContextSkillsTokensByName(
+	skills: readonly ContextSkill[],
+	tokenizer: Tokenizer,
+): ContextNamedTokens[] {
+	return skills
+		.map(skill => ({
+			name: skill.name,
+			tokens: tokenizer.countTokens([skill.name, skill.description ?? ""]),
+		}))
+		.sort((a, b) => b.tokens - a.tokens || a.name.localeCompare(b.name));
 }
 
 /**
