@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
+import * as os from "node:os";
 import * as path from "node:path";
 import { PtySession } from "@oh-my-pi/pi-natives";
 import {
@@ -14,16 +15,6 @@ import { contextSessionFixture } from "../../ai/test/fixtures/context-session";
 const ROOT = path.resolve(import.meta.dir, "../../..");
 const CLI = path.join(ROOT, "packages/coding-agent/src/cli.ts");
 const CHROME = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
-const ENV_KEYS = [
-	"PI_CONFIG_DIR",
-	"PI_CODING_AGENT_DIR",
-	"PI_SESSION_FILE",
-	"PI_SESSION_ID",
-	"XDG_DATA_HOME",
-	"XDG_STATE_HOME",
-	"XDG_CACHE_HOME",
-	"PUPPETEER_EXECUTABLE_PATH",
-] as const;
 
 function cleanEnv(config: string, agent: string): Record<string, string> {
 	const env: Record<string, string> = {};
@@ -35,7 +26,6 @@ function cleanEnv(config: string, agent: string): Record<string, string> {
 	env.PI_CONFIG_DIR = config;
 	env.PI_CODING_AGENT_DIR = agent;
 	env.TERM = "xterm-256color";
-	env.ANTHROPIC_API_KEY = "test-key";
 	return env;
 }
 
@@ -76,41 +66,56 @@ function startPty(args: string[], cwd: string, env: Record<string, string>): Pty
 
 async function startTui(file: string, sessionsDir: string, env: Record<string, string>): Promise<PtyHandle> {
 	const handle = startPty(
-		[CLI, "--model", "anthropic/claude-sonnet-4-5", "--resume", file, "--session-dir", sessionsDir],
+		[CLI, "--model", "mock/mock-model", "--resume", file, "--session-dir", sessionsDir],
 		ROOT,
 		env,
 	);
 	await waitFor(() => handle.output().includes("π >"), 20_000, "TUI prompt");
-	await Bun.sleep(2500);
+	await Bun.sleep(2000);
 	handle.session.write("/context\r");
 	await waitFor(() => handle.output().includes("1-4 jump"), 20_000, "TUI context panel");
 	return handle;
 }
 
-async function appendSeventh(file: string, parentId: string): Promise<void> {
-	const existing = await fs.readFile(file, "utf8");
-	const entry = {
-		type: "message",
-		id: "a7",
-		parentId,
-		timestamp: new Date().toISOString(),
-		message: {
-			role: "assistant",
-			timestamp: Date.now(),
-			model: "model-b",
-			provider: "test",
-			content: [{ type: "text", text: "PRIVATE_LIVE_E2E_BODY" }],
-			usage: { input: 140, output: 5, cacheRead: 0, cacheWrite: 0, cost: { total: 0 } },
-			stopReason: "stop",
-			contextSnapshot: {
-				promptTokens: 140,
-				nonMessageTokens: 80,
-				toolSchemaTokens: 30,
-				compactionEpoch: 0,
-			},
+function mockProvider(): { server: ReturnType<typeof Bun.serve>; url: string } {
+	const payload = [
+		`data: ${JSON.stringify({
+			id: "chatcmpl-live",
+			object: "chat.completion.chunk",
+			created: Math.floor(Date.now() / 1000),
+			model: "mock-model",
+			choices: [{ index: 0, delta: { role: "assistant", content: "done from mock" }, finish_reason: null }],
+		})}\n\n`,
+		`data: ${JSON.stringify({
+			id: "chatcmpl-live",
+			object: "chat.completion.chunk",
+			created: Math.floor(Date.now() / 1000),
+			model: "mock-model",
+			choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
+			usage: { prompt_tokens: 100, completion_tokens: 4, total_tokens: 104 },
+		})}\n\n`,
+		"data: [DONE]\n\n",
+	].join("");
+	const server = Bun.serve({
+		port: 0,
+		async fetch(request) {
+			const body = await request.json().catch(() => undefined);
+			if (body && typeof body === "object" && "stream" in body && body.stream === false) {
+				return Response.json({
+					id: "chatcmpl-live",
+					object: "chat.completion",
+					created: Math.floor(Date.now() / 1000),
+					model: "mock-model",
+					choices: [
+						{ index: 0, message: { role: "assistant", content: "done from mock" }, finish_reason: "stop" },
+					],
+					usage: { prompt_tokens: 100, completion_tokens: 4, total_tokens: 104 },
+				});
+			}
+			return new Response(payload, { headers: { "content-type": "text/event-stream" } });
 		},
-	};
-	await fs.writeFile(file, `${existing.trimEnd()}\n${JSON.stringify(entry)}\n`);
+	});
+	return { server, url: `http://127.0.0.1:${server.port}/v1` };
 }
 
 describe("context insights live source E2E", () => {
@@ -118,22 +123,22 @@ describe("context insights live source E2E", () => {
 	let chromium: LaunchHeadlessResult | undefined;
 	let tui: PtyHandle | undefined;
 	let stats: PtyHandle | undefined;
-	let serverUrl = "";
+	let mock: ReturnType<typeof mockProvider> | undefined;
 
 	beforeAll(async () => {
 		temp = TempDir.createSync("@pi-context-live-e2e-");
-		const old = new Map<string, string | undefined>();
-		for (const key of ENV_KEYS) old.set(key, process.env[key]);
-		process.env.PI_CONFIG_DIR = temp.join("config");
-		process.env.PI_CODING_AGENT_DIR = temp.join("config", "agent");
+		mock = mockProvider();
+		const config = temp.join("config");
+		const agent = path.join(config, "agent");
+		await fs.mkdir(agent, { recursive: true });
+		await fs.writeFile(
+			path.join(agent, "models.yml"),
+			`providers:\n  mock:\n    baseUrl: ${mock.url}\n    api: openai-completions\n    apiKey: test\n    models:\n      - id: mock-model\n        name: Mock Model\n        input: [text]\n        contextWindow: 200000\n        maxTokens: 4096\n`,
+		);
+		process.env.PI_CONFIG_DIR = config;
+		process.env.PI_CODING_AGENT_DIR = agent;
 		for (const key of ["XDG_DATA_HOME", "XDG_STATE_HOME", "XDG_CACHE_HOME", "PI_SESSION_FILE", "PI_SESSION_ID"])
 			delete process.env[key];
-		(globalThis as { __restoreLiveEnv?: () => void }).__restoreLiveEnv = () => {
-			for (const [key, value] of old) {
-				if (value === undefined) delete process.env[key];
-				else process.env[key] = value;
-			}
-		};
 		if (!process.env.PUPPETEER_EXECUTABLE_PATH && (await Bun.file(CHROME).exists()))
 			process.env.PUPPETEER_EXECUTABLE_PATH = CHROME;
 		const executable = await ensureChromiumExecutable();
@@ -148,12 +153,12 @@ describe("context insights live source E2E", () => {
 			await chromium?.browser.close();
 		} finally {
 			if (chromium?.userDataDir) await removeUserDataDir(chromium.userDataDir);
-			(globalThis as { __restoreLiveEnv?: () => void }).__restoreLiveEnv?.();
+			mock?.server.stop(true);
 			temp?.removeSync();
 		}
 	});
 
-	it("observes TUI and already-open Web detail both refresh from six to seven steps", async () => {
+	it("reaches seven steps in one live TUI turn and an already-open Web detail", async () => {
 		const fixture = contextSessionFixture();
 		const sessionsDir = path.join(temp.path(), "config", "agent", "sessions", "data");
 		const file = path.join(sessionsDir, "--context-live--", "live.jsonl");
@@ -170,10 +175,12 @@ describe("context insights live source E2E", () => {
 
 		tui = await startTui(file, sessionsDir, env);
 		expect(tui.output()).toMatch(/Steps\s+6/);
+		tui.session.write("\x1b");
+		await waitFor(() => !tui!.output().split("\n").at(-1)?.includes("1-4 jump"), 5_000, "TUI panel close");
 
 		const port = 4300 + Math.floor(Math.random() * 200);
 		stats = startPty([CLI, "stats", "-p", String(port), "--host", "127.0.0.1"], ROOT, env);
-		serverUrl = `http://127.0.0.1:${port}`;
+		const serverUrl = `http://127.0.0.1:${port}`;
 		await waitFor(
 			async () => {
 				try {
@@ -185,7 +192,6 @@ describe("context insights live source E2E", () => {
 			30_000,
 			"stats server",
 		);
-
 		const page = await chromium!.browser.newPage();
 		try {
 			await page.goto(`${serverUrl}/#/context?range=24h&s=${encodeURIComponent(file)}`, {
@@ -198,25 +204,27 @@ describe("context insights live source E2E", () => {
 			if (!delta) throw new Error("Web delta toggle missing");
 			await delta.click();
 
-			tui.session.kill();
-			await tui.done.catch(() => {});
-			await appendSeventh(file, "a6");
-			tui = await startTui(file, sessionsDir, env);
+			tui.session.write("say done\r");
+			await waitFor(() => tui!.output().includes("done from mock"), 30_000, "TUI live turn");
+			tui.session.write("/context\r");
+			await waitFor(() => tui!.output().includes("1-4 jump"), 10_000, "TUI reopen context");
+			await waitFor(() => /Steps\s+7/.test(tui!.output()), 10_000, "TUI seven steps");
 			tui.session.write("\t");
 			await waitFor(() => tui!.output().includes("#6"), 10_000, "TUI Trend");
 			tui.session.write("d");
-			await waitFor(() => /#6.*140.*Δ \+120/.test(tui!.output()), 20_000, "TUI source CLI reads seven");
+			await waitFor(() => /#6.*100.*Δ \+80/.test(tui!.output()), 20_000, "TUI delta +80");
+
 			await waitFor(
 				async () =>
 					(await page.$eval('[data-testid="context-detail-requests"]', element => element.textContent)) === "7",
 				25_000,
 				"Web refresh to seven",
 			);
-			await page.waitForFunction('document.querySelector("body")?.textContent?.includes("+120")', {
+			await page.waitForFunction('document.querySelector("body")?.textContent?.includes("+80")', {
 				timeout: 20_000,
 			});
 			expect(await page.$eval("body", element => element.textContent)).toContain("#6");
-			expect(await page.$eval("body", element => element.textContent)).not.toContain("PRIVATE_LIVE_E2E_BODY");
+			expect(await page.$eval("body", element => element.textContent)).not.toContain("done from mock");
 		} finally {
 			await page.close();
 		}

@@ -1378,6 +1378,9 @@ async function runLoopBody(
 					}
 
 					preparedProviderCall = await prepareProviderCall(currentContext, config, signal);
+					if (config.afterProviderContext) {
+						await config.afterProviderContext(preparedProviderCall.context, preparedProviderCall.model);
+					}
 					preparedProviderCall.liveSteering = openLiveSteering(config, signal, preparedProviderCall);
 					gateResult = (await config.beforeModelCall?.(preparedProviderCall.context, signal)) || undefined;
 				} catch (error) {

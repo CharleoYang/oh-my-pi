@@ -322,6 +322,38 @@ describe("foldContextTimeline", () => {
 		expect(timeline.incompleteFileCalls).toBe(1);
 	});
 
+	test("deduplicates ast_edit spellings and replaces selectors with concrete files", () => {
+		const timeline = foldContextTimeline(
+			input({
+				entries: [
+					assistant("a1", 1, 10, [
+						{
+							type: "toolCall",
+							id: "ast-dup",
+							name: "ast_edit",
+							arguments: { ops: [], paths: ["src/a.ts", "./src/a.ts"] },
+						},
+						{
+							type: "toolCall",
+							id: "ast-glob",
+							name: "ast_edit",
+							arguments: { ops: [], paths: ["src/*.ts"] },
+						},
+					]),
+					toolResult("r1", 2, "ast-dup", "ast_edit", { files: ["src/a.ts"] }),
+					toolResult("r2", 2, "ast-glob", "ast_edit", {
+						files: ["src/x.ts", "src/y.ts"],
+						fileReplacements: [{ path: "src/y.ts", count: 1 }],
+					}),
+				],
+			}),
+		);
+		expect(timeline.files.map(file => file.path)).toEqual(["/work/src/a.ts", "/work/src/x.ts", "/work/src/y.ts"]);
+		expect(timeline.files.every(file => file.edits === 1)).toBe(true);
+		expect(timeline.steps[0]?.filePaths).toEqual(["/work/src/a.ts", "/work/src/x.ts", "/work/src/y.ts"]);
+		expect(timeline.incompleteFileCalls).toBe(0);
+	});
+
 	test("keeps cost across the step cap", () => {
 		const timeline = foldContextTimeline(
 			input({

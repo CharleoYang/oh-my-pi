@@ -24,6 +24,7 @@ const usage = (input: number) => ({
 
 describe("context snapshot request boundary", () => {
 	let session: AgentSession;
+	let mock: ReturnType<typeof createMockModel>;
 	let authStorage: AuthStorage | undefined;
 	let tempDir: string;
 
@@ -35,7 +36,7 @@ describe("context snapshot request boundary", () => {
 		authStorage = await AuthStorage.create(path.join(tempDir, "auth.db"));
 		authStorage.keys.setRuntime("anthropic", "test-key");
 		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir, "models.yml"));
-		const mock = createMockModel({
+		mock = createMockModel({
 			responses: [
 				{ content: [{ type: "toolCall", name: "probe", arguments: { value: "first" } }], usage: usage(100) },
 				{ content: ["done"], stopReason: "stop", usage: usage(200) },
@@ -54,6 +55,13 @@ describe("context snapshot request boundary", () => {
 		const agent = new Agent({
 			initialState: { model, systemPrompt: ["system"], tools: [probe as AgentTool], messages: [] },
 			streamFn: mock.stream,
+			transformProviderContext: context => ({
+				...context,
+				messages: [
+					{ role: "user", content: "prepended", timestamp: 0 },
+					...context.messages,
+				] as typeof context.messages,
+			}),
 		});
 		session = new AgentSession({
 			agent,
@@ -88,8 +96,9 @@ describe("context snapshot request boundary", () => {
 				(message as { contextSnapshot?: { details?: { messageCount: number; categories: { messages: number } } } })
 					.contextSnapshot!.details!,
 		);
-		expect(details[0]!.messageCount).not.toBe(details[1]!.messageCount);
-		expect(details[1]!.messageCount).toBeGreaterThan(details[0]!.messageCount);
+		expect(details[0]!.messageCount).toBe(mock.calls[0]!.context.messages.length);
+		expect(details[1]!.messageCount).toBe(mock.calls[1]!.context.messages.length);
+		expect(details[0]!.messageCount).toBeLessThan(details[1]!.messageCount);
 		expect(details[0]!.categories.messages).not.toBe(details[1]!.categories.messages);
 	});
 });

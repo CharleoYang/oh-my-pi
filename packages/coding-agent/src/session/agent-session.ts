@@ -2711,7 +2711,7 @@ export class AgentSession implements SettingsScope {
 			),
 		);
 		this.addDisposer(
-			this.agent.addBeforeModelCallHook((_signal, context) => this.#captureProviderRequestSnapshot(context)),
+			this.agent.addAfterProviderContextHook(context => this.#captureProviderRequestSnapshot(context)),
 		);
 
 		const handoffHost: SessionHandoffHost = {
@@ -13414,7 +13414,7 @@ export class AgentSession implements SettingsScope {
 	 * otherwise estimates tokens for all messages.
 	 */
 	/** Recompute composition at the exact provider-request boundary, not once per prompt. */
-	#captureProviderRequestSnapshot(context: AgentContext): void {
+	#captureProviderRequestSnapshot(context: Context): void {
 		const contextWindow = this.model?.contextWindow ?? 0;
 		const base = this.getContextBreakdown({ contextWindow });
 		if (!base) return;
@@ -13426,7 +13426,7 @@ export class AgentSession implements SettingsScope {
 		const details = captureContextSnapshotDetails({
 			breakdown,
 			contextWindow,
-			systemPrompt: context.systemPrompt,
+			systemPrompt: context.systemPrompt ?? this.systemPrompt,
 			tools: context.tools ?? [],
 			skills: this.renderedSkills,
 			model: this.model,

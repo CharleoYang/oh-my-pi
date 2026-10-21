@@ -446,10 +446,14 @@ export function foldContextTimeline(input: ContextTimelineInput): ContextTimelin
 					if (!isFileTool && !isSearchTool) continue;
 					const astPaths =
 						toolName === "ast_edit" && Array.isArray(args.paths)
-							? args.paths
-									.filter((value): value is string => typeof value === "string" && value.length > 0)
-									.map(value => resolveToolPath({ path: value }, input.normalizePath))
-									.filter((value): value is string => value !== undefined)
+							? [
+									...new Set(
+										args.paths
+											.filter((value): value is string => typeof value === "string" && value.length > 0)
+											.map(value => resolveToolPath({ path: value }, input.normalizePath))
+											.filter((value): value is string => value !== undefined),
+									),
+								]
 							: [];
 					const rawPath = astPaths[0] ?? args.path ?? args.file_path;
 					const hasRawPath = typeof rawPath === "string" && rawPath.length > 0;
@@ -567,6 +571,36 @@ export function foldContextTimeline(input: ContextTimelineInput): ContextTimelin
 						if (typeof raw !== "string") continue;
 						const resolved = resolveToolPath({ path: raw }, input.normalizePath);
 						if (resolved) actual.add(resolved);
+					}
+					if (actual.size > 0 && call.paths) {
+						// Drop provisional directories/globs and duplicate spellings once the
+						// result names the concrete files that were actually rewritten.
+						for (const requested of call.paths) {
+							if (actual.has(requested)) continue;
+							const provisional = files.get(requested);
+							if (provisional) {
+								provisional.edits = Math.max(0, provisional.edits - 1);
+								const empty =
+									provisional.reads === 0 &&
+									provisional.writes === 0 &&
+									provisional.edits === 0 &&
+									provisional.searches === 0 &&
+									provisional.linesRead === 0 &&
+									provisional.linesAdded === 0 &&
+									provisional.linesRemoved === 0 &&
+									provisional.bytesRead === 0 &&
+									provisional.bytesWritten === 0;
+								if (empty) files.delete(requested);
+							}
+							const owner = call.owner;
+							const usedElsewhere = [...pendingCalls.values()].some(
+								other =>
+									other !== call &&
+									other.owner === owner &&
+									(other.path === requested || other.paths?.includes(requested)),
+							);
+							if (!usedElsewhere) owner?.filePaths.delete(requested);
+						}
 					}
 					for (const target of actual) {
 						if (!call.paths?.includes(target)) {
