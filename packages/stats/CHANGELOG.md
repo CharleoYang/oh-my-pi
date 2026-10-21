@@ -5,10 +5,13 @@
 ### Added
 
 - Added a range-scoped Context overview API with root-session and child-transcript aggregation, activity heatmaps, prompt-token KPIs, and explicit totals for sessions beyond the 200-row limit.
+- Added `/api/session/context` and its stats client API: live-equivalent active-branch timelines, gzip-aware recursive fleet summaries, and root/child ETag revalidation with a bounded client cache. Timeline composition and browser details use the shared TUI fold; fleet peak uses its latest 1000-step window while cost covers the full active branch, and usage totals retain the shared fold's input/output/cache accounting.
 
 ## [18.12.0] - 2026-10-17
 
 ### Fixed
+
+- Invalidated the trace memo when a child transcript is renamed between `.jsonl` and `.jsonl.gz` at the same mtime by preserving the filename suffix in freshness keys.
 
 - Fixed usage stats pricing Google Antigravity and MiniMax Token Plan models at $0 when their catalog rows carry no price; they now use the catalog's pricing peer, as `xai-oauth` already did ([#16092](https://github.com/can1357/oh-my-pi/pull/16092) by [@H4vC](https://github.com/H4vC))
 

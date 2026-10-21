@@ -6,6 +6,15 @@ import { extractFolderFromPath } from "./parser";
 import type { ContextOverview, ContextSessionRow, TimeRange } from "./shared-types";
 import { readSessionMetadata } from "./trace";
 
+export {
+	buildSessionContextResponse,
+	buildSessionContextTimeline,
+	CONTEXT_ETAG_VERSION,
+	contextFingerprintForEtag,
+	type ContextFingerprint,
+	type ContextSessionTimelineResult,
+} from "./session-context";
+
 const HOUR_MS = 60 * 60 * 1000;
 const DAY_MS = 24 * HOUR_MS;
 const SESSION_LIMIT = 200;

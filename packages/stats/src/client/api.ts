@@ -1,4 +1,5 @@
 import type {
+	ContextTimeline,
 	CostDashboardStats,
 	FolderStats,
 	FrustrationDashboardStats,
@@ -216,6 +217,19 @@ export async function getSessionTrace(
 	// `no-store`: validation is ours (above); the browser cache would only keep a second multi-MB copy.
 	return fetchJson<SessionTrace>(
 		`${API_BASE}/session/trace?file=${encodeURIComponent(file)}`,
+		{ signal, cache: "no-store" },
+		previous,
+	);
+}
+
+/** Revalidate a journal timeline without a second browser-cache copy. */
+export async function getSessionContext(
+	file: string,
+	signal?: AbortSignal,
+	previous?: ContextTimeline,
+): Promise<ContextTimeline> {
+	return fetchJson<ContextTimeline>(
+		`${API_BASE}/session/context?file=${encodeURIComponent(file)}`,
 		{ signal, cache: "no-store" },
 		previous,
 	);

@@ -17,7 +17,12 @@ import {
 	getTimeRangeConfig,
 	getToolDashboardStats,
 } from "./aggregator";
-import { getContextOverview } from "./context";
+import {
+	buildSessionContextResponse,
+	CONTEXT_ETAG_VERSION,
+	contextFingerprintForEtag,
+	getContextOverview,
+} from "./context";
 import { initDb } from "./db";
 import { decodeEmbeddedClientArchive, hasEmbeddedClientArchive } from "./embedded-client";
 import embeddedClientArchiveTxt from "./embedded-client.generated.txt";
@@ -320,6 +325,27 @@ export async function handleApi(req: Request): Promise<Response> {
 			const etag = `"${TRACE_ETAG_VERSION}:${trace.etag}"`;
 			if (clientEtag === etag) return new Response(null, { status: 304 });
 			return Response.json(trace, { headers: { ETag: etag } });
+		} catch (err) {
+			if (err instanceof TracePathError) return Response.json({ error: err.message }, { status: 400 });
+			if (isEnoent(err)) return Response.json({ error: "session not found" }, { status: 404 });
+			throw err;
+		}
+	}
+
+	if (path === "/api/session/context") {
+		const file = url.searchParams.get("file");
+		if (!file) return Response.json({ error: "file required" }, { status: 400 });
+		try {
+			const clientEtag = req.headers.get("if-none-match");
+			const fingerprint = clientEtag ? await contextFingerprintForEtag(file) : undefined;
+			if (fingerprint) {
+				const etag = `"${CONTEXT_ETAG_VERSION}:${fingerprint.etag}"`;
+				if (clientEtag === etag) return new Response(null, { status: 304, headers: { ETag: etag } });
+			}
+			const result = await buildSessionContextResponse(file, undefined, fingerprint);
+			const etag = `"${CONTEXT_ETAG_VERSION}:${result.etag}"`;
+			if (clientEtag === etag) return new Response(null, { status: 304, headers: { ETag: etag } });
+			return Response.json(result.timeline, { headers: { ETag: etag } });
 		} catch (err) {
 			if (err instanceof TracePathError) return Response.json({ error: err.message }, { status: 400 });
 			if (isEnoent(err)) return Response.json({ error: "session not found" }, { status: 404 });
