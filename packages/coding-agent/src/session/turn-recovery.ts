@@ -819,13 +819,16 @@ export class TurnRecovery {
 		return (await recorded).switchedCredential;
 	}
 
-	/** Prompts after transient overlap with a prior agent run. */
+	/** Prompts after transient overlap with a prior agent run. A `submit` callback owns the
+	 *  claim and reports whether its run was admitted; otherwise `onClaimed` fires synchronously
+	 *  right after a successful `agent.prompt` claim (before the run is awaited). */
 	promptAgentWithIdleRetry(
 		messages: AgentMessage[],
 		options?: { toolChoice?: ToolChoice },
 		submit?: () => Promise<boolean>,
+		onClaimed?: () => void,
 	): Promise<boolean> {
-		return this.#promptAgentWithIdleRetry(messages, options, submit);
+		return this.#promptAgentWithIdleRetry(messages, options, submit, onClaimed);
 	}
 
 	/** Parses provider retry and rate-limit reset hints into a delay. */
@@ -3115,12 +3118,29 @@ export class TurnRecovery {
 		messages: AgentMessage[],
 		options?: { toolChoice?: ToolChoice },
 		submit?: () => Promise<boolean>,
+		onClaimed?: () => void,
 	): Promise<boolean> {
 		const deadline = Date.now() + 30_000;
 		for (;;) {
+			// A claim whose synchronous prefix throws (busy agent, missing
+			// model) returns an already-rejected promise. Probe for that
+			// before firing `onClaimed`: a busy-retry parked behind an
+			// autonomous run must not report that run's streaming as ours
+			// going live. The rejection handler rethrows, so the error
+			// still surfaces at the await below.
+			let claimFailed = false;
 			try {
 				if (submit) return await submit();
-				await this.#host.agent.prompt(messages, options);
+				const claim = this.#host.agent.prompt(messages, options).then(undefined, error => {
+					claimFailed = true;
+					throw error;
+				});
+				// One microtask turn: an already-rejected promise's reaction
+				// job is queued ahead of this await's continuation, so
+				// `claimFailed` is settled by the time we resume.
+				await Promise.resolve();
+				if (!claimFailed) onClaimed?.();
+				await claim;
 				return true;
 			} catch (err) {
 				if (!(err instanceof AgentBusyError)) {

@@ -365,9 +365,13 @@ describe("context insights source-only cross-surface E2E", () => {
 					await controlPage.waitForSelector('[data-testid="context-tab-files"][aria-selected="true"]');
 					await controlPage.waitForSelector(".context-file-open");
 					await controlPage.evaluate(() => {
-						(window as unknown as { __hash: number }).__hash = 0;
-						window.addEventListener("hashchange", () => {
-							(window as unknown as { __hash: number }).__hash++;
+						const browser = globalThis as unknown as {
+							__hash: number;
+							addEventListener: (type: string, listener: () => void) => void;
+						};
+						browser.__hash = 0;
+						browser.addEventListener("hashchange", () => {
+							browser.__hash++;
 						});
 					});
 					const button = await controlPage.$(".context-file-open");
@@ -377,11 +381,15 @@ describe("context insights source-only cross-surface E2E", () => {
 						await button.focus();
 						await controlPage.keyboard.press(action);
 					}
-					await controlPage.waitForFunction(() => location.hash.includes("/traces"));
+					await controlPage.waitForFunction(() =>
+						(
+							globalThis as unknown as {
+								location: { hash: string };
+							}
+						).location.hash.includes("/traces"),
+					);
 					await Bun.sleep(150);
-					expect(
-						await controlPage.evaluate(() => (window as unknown as { __hash: number }).__hash),
-					).toBe(1);
+					expect(await controlPage.evaluate(() => (globalThis as unknown as { __hash: number }).__hash)).toBe(1);
 				} finally {
 					await controlPage.close();
 				}
