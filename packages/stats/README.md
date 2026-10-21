@@ -66,8 +66,10 @@ console.log(stats.byModel[0].avgTokensPerSecond);
 | `GET /api/events` | Server-sent live status: sync progress, data version, rollup backlog |
 | `GET /api/status` | Current live status (same shape as the events) |
 | `POST /api/sync` | Start a background sync; progress arrives on `/api/events` |
-| `GET /api/context/overview` | Range-scoped global context KPIs, heatmap, and sessions |
-| `GET /api/session/context` | Six-tab session context timeline and fleet detail |
+| `GET /api/context/overview?range=24h` | DB approximation: one cutoff for KPIs, heatmap and root-session rows (including children); ranges `1h`, `24h`, `7d`, `30d`, `90d`; 200 rows plus omitted totals |
+| `GET /api/session/context?file=<absolute-session-path>` | Authoritative active-branch journal timeline and fleet; `ETag` / `If-None-Match` revalidation returns 304 when unchanged |
+
+Session context responses contain counts, token estimates, tool/skill names and file activity, never prompt/message/tool-result bodies. Responses are bounded to 1000 steps, 200 events, 500 files and 500 named Browser entries across steps. Truncation and omitted counts are explicit; legacy snapshots are not reconstructed from current configuration. Session paths must remain inside the configured sessions directory.
 
 ## Data Storage
 
@@ -82,7 +84,19 @@ Range queries read `message_rollup` / `tool_rollup` / `session_rollup`, maintain
 
 ## Dashboard
 
-Pages: Overview, Models, Providers, Costs, Requests, Errors, Traces, Context, Tools, Frustration, Projects and Gain. Context includes six-tab session detail (Composition, Trend, Browser, Events, Files and Fleet). `1`–`6` pick the time range; `g` then a letter jumps to a page.
+| Page | Hash route | Contents |
+| --- | --- | --- |
+| Context | `#/context?range=24h` | Global KPIs, activity heatmap and clickable session rows; DB approximation, not historical composition |
+| Context detail | `#/context?range=24h&s=<encoded-session-path>` | Composition, Trend, Browser, Events, Files and Fleet; shared selected-step state and child-session drill-down |
+| Other pages | Overview, Models, Providers, Costs, Requests, Errors, Traces, Tools, Frustration, Projects and Gain | Existing usage, trace and cost reports |
+
+`1`–`6` pick the time range; `g` then `x` opens Context. Context maps the global `all` selection to a visibly labeled `90d` window so its KPIs, heatmap and rows always use the same bounded range. Files opens the session in Traces; Fleet opens child context detail and offers a return to the root.
+
+### Source-only cross-surface acceptance
+
+Run `bun test packages/coding-agent/test/context-insights-e2e.test.ts --timeout=180000` from the repository root. It opens a real VirtualTerminal `/context` report, starts the stats server on an ephemeral loopback port, ingests the same temporary journal and drives the built SPA in headless Chromium. Configuration, agent data, auth, stats DB, browser profile and screenshot output are temporary; no real `~/.omp` writes are required. Chromium must launch: missing/unlaunchable browsers fail `beforeAll`, never skip. The test uses `ensureChromiumExecutable`, an existing system Chrome when available, or `PUPPETEER_EXECUTABLE_PATH`; automatic Chrome for Testing provisioning may download a browser on first use.
+
+The test runs source only and fingerprints `/opt/homebrew/bin/omp` before/after without invoking it. It never runs an installer or `bun link`. Replacing an installed omp requires separate explicit user approval, even after acceptance passes.
 
 ## License
 

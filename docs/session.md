@@ -168,6 +168,19 @@ Stores an `AgentMessage` directly.
 }
 ```
 
+#### Optional request-time context snapshot details
+
+Assistant `message.contextSnapshot` may contain `promptTokens`, `nonMessageTokens`, `toolSchemaTokens`, `compactionEpoch`, and optional `details`. `details` captures request-time estimates, not message/system-prompt/tool-result bodies:
+
+- `contextWindow` and five token categories: `systemPrompt`, `systemTools`, `systemContext`, `skills`, `messages`.
+- Named `toolSchemas` and `skills` (`{ name, tokens }`), capped at 200 entries each; `omittedToolSchemas` / `omittedSkills` count excluded names.
+- `systemPromptParts` token counts, capped at 20 slots; excess parts are absorbed into retained slots and reported by `systemPromptPartsOmitted`.
+- `messageCount` and `pendingMessageTokens`.
+
+Details are captured for the request and preserved with its assistant result (including aborted/error results); they are never synthesized for legacy snapshots or rebuilt from current tools/skills. Provider prompt usage remains authoritative; category composition is estimated and `unattributed = promptTokens - sum(categories)` may be negative. All-zero source weights do not invent named entries.
+
+Context report adapters fold the active branch and expose bounded per-step details. The HTTP response caps are 1000 steps, 200 events, 500 files and a newest-first budget of 500 Browser entries across returned steps. A step that would exceed that budget loses its whole `details` projection, increments `detailsOmittedSteps` and sets `truncated`; it is not thereby legacy. Old snapshots show composition/details unavailable rather than fabricated zeros. The TUI uses smaller limits (200/100/50, Browser budget 0) while retaining any recorded category composition.
+
 The persisted `message.role` discriminant is **camelCase**, not the snake_case used by
 the LLM wire format or extension hook names. Ordinary conversation records use these
 roles under `type: "message"`:
