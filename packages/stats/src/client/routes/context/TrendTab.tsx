@@ -53,6 +53,7 @@ export function TrendTab({
 		];
 	}, [steps]);
 	const briefStep = timeline.steps[selected] ?? steps.at(-1);
+	const contextWindow = briefStep?.contextWindow && briefStep.contextWindow > 0 ? briefStep.contextWindow : undefined;
 	return (
 		<section className="card context-trend">
 			<header className="card-header">
@@ -113,6 +114,7 @@ export function TrendTab({
 								slots={steps.length}
 								tickLabel={index => `#${steps[index]?.index ?? ""}`}
 								series={series}
+								references={contextWindow ? [{ value: contextWindow, label: "window" }] : undefined}
 								onSelect={index => onSelect(offset + index)}
 								format={formatCompact}
 								tooltipExtra={index => (

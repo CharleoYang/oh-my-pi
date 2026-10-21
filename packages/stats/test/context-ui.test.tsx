@@ -428,6 +428,23 @@ describe("Context page", () => {
 		expect(container.textContent).not.toContain("latency");
 	});
 
+
+	it("announces an explicit step selection without making polling live", async () => {
+		const container = await renderRoute("/tmp/detail.jsonl");
+		expect(container.querySelector('[role="status"]')?.textContent).toBe("");
+		const trend = [...container.querySelectorAll("button")].find(button => button.textContent === "Trend");
+		if (!trend) throw new Error("Trend tab missing");
+		await act(async () => {
+			trend.click();
+		});
+		const marker = container.querySelector(".context-marker");
+		if (!marker) throw new Error("trend marker missing");
+		await act(async () => {
+			(marker as HTMLElement).click();
+		});
+		expect(container.querySelector('[role="status"]')?.textContent).toContain("selected");
+	});
+
 	it("routes a step event chip to Events with its kind active", async () => {
 		const container = await renderRoute("/tmp/detail.jsonl");
 		const trend = [...container.querySelectorAll("button")].find(button => button.textContent === "Trend");

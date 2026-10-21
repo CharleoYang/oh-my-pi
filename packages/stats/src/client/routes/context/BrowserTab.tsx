@@ -3,7 +3,7 @@ import { formatCompact, formatPercent, formatTimestamp } from "../../data/format
 import { Badge, Card, SearchInput } from "../../ui";
 import type { ContextTimeline } from "../../types";
 import { ContextNotice } from "./ContextNotice";
-import { CATEGORY_KEYS, CATEGORY_STYLE, categoryShare } from "./view-models";
+import { CATEGORY_KEYS, CATEGORY_STYLE } from "./view-models";
 
 export function BrowserTab({
 	timeline,
@@ -32,11 +32,13 @@ export function BrowserTab({
 	const skills = (details?.skills ?? []).filter(item => item.name.toLowerCase().includes(needle));
 	const categories = useMemo(() => {
 		if (!step?.composition) return [];
+		const sum = CATEGORY_KEYS.reduce((total, key) => total + Math.max(0, step.composition![key]), 0);
+		const denominator = sum > step.promptTokens ? sum : step.promptTokens;
 		return CATEGORY_KEYS.map(key => ({
 			key,
 			...CATEGORY_STYLE[key],
 			tokens: step.composition![key],
-			share: categoryShare(step.composition![key], step),
+			share: denominator > 0 ? step.composition![key] / denominator : 0,
 		}));
 	}, [step]);
 	const show = (key: string) => category === null || category === key;

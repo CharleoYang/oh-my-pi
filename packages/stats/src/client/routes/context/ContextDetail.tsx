@@ -31,6 +31,7 @@ export function ContextDetail({
 	const [tab, setTab] = useState<ContextTab>("composition");
 	const [selected, setSelected] = useState(-1);
 	const [eventsKindFilter, setEventsKindFilter] = useState<string[]>([]);
+	const [selectionStatus, setSelectionStatus] = useState("");
 	const [rootFile, setRootFile] = useState(file);
 	const [displayFile, setDisplayFile] = useState(file);
 	const query = useQuery<ContextTimeline>(
@@ -68,12 +69,24 @@ export function ContextDetail({
 		if (agent.status !== "subagent" || !agent.file) return;
 		setDisplayFile(agent.file);
 	};
+	const selectStep = (index: number) => {
+		const step = timeline?.steps[index];
+		setSelected(index);
+		if (step) setSelectionStatus(`Step ${step.index} selected, prompt ${formatCompact(step.promptTokens)} tokens`);
+	};
 	const openEvent = (event: ContextEvent) => {
+		if (timeline && event.stepIndex !== undefined) {
+			const index = timeline.steps.findIndex(step => step.index === event.stepIndex);
+			if (index >= 0) selectStep(index);
+		}
 		setTab("events");
 		setEventsKindFilter([event.kind]);
 	};
 	return (
 		<div className="stack context-detail">
+			<div className="context-sr-only" role="status" aria-live="polite" aria-atomic="true">
+				{selectionStatus}
+			</div>
 			<PageHeader
 				title={child ? "Viewing subagent" : "Context detail"}
 				description={
@@ -104,7 +117,7 @@ export function ContextDetail({
 						<strong data-testid="context-detail-peak">{formatCompact(timeline.peakTokens)}</strong> peak prompt
 					</span>
 					<span>
-						<strong>{formatCost(timeline.costTotal)}</strong> est. cost
+						<strong>{formatCost(timeline.costTotal)}</strong> recorded cost
 					</span>
 					{timeline.legacySteps > 0 && <Badge>legacy</Badge>}
 					{timeline.truncated && <Badge tone="warn">truncated</Badge>}
@@ -149,21 +162,21 @@ export function ContextDetail({
 			>
 				{data =>
 					tab === "composition" ? (
-						<CompositionTab timeline={data} selected={currentStep} onSelect={setSelected} />
+						<CompositionTab timeline={data} selected={currentStep} onSelect={selectStep} />
 					) : tab === "trend" ? (
 						<TrendTab
 							timeline={data}
 							selected={currentStep}
-							onSelect={setSelected}
+							onSelect={selectStep}
 							onOpenBrowser={() => setTab("browser")}
 							onOpenEvent={openEvent}
 						/>
 					) : tab === "browser" ? (
-						<BrowserTab timeline={data} selected={currentStep} onSelect={setSelected} />
+						<BrowserTab timeline={data} selected={currentStep} onSelect={selectStep} />
 					) : tab === "events" ? (
 						<EventsTab
 							timeline={data}
-							onSelect={setSelected}
+							onSelect={selectStep}
 							kindFilter={eventsKindFilter}
 							onKindFilterChange={setEventsKindFilter}
 						/>

@@ -43,7 +43,7 @@ export function ContextTokenMix({
 				<ContextNotice>No token usage recorded for returned steps.</ContextNotice>
 			)}
 			<p className="context-card-foot">
-				<span>{formatCost(costTotal)} estimated cost</span>
+				<span>{formatCost(costTotal)} recorded step cost</span>
 				{omittedSteps > 0 && <span>+{omittedSteps} steps omitted</span>}
 			</p>
 		</Card>
