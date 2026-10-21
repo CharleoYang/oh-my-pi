@@ -51,6 +51,31 @@ function request(file: string, etag?: string) {
 }
 
 describe("session context", () => {
+	it("excludes zero-context-token assistants from fleet cost", async () => {
+		const entries: unknown[] = [
+			{ type: "session", id: "session-zero-context", cwd: "/work/project" },
+			assistant("a1", null, 1),
+			{
+				...assistant("a2", "a1", 3),
+				message: {
+					...assistant("a2", "a1", 3).message,
+					usage: { input: 3, output: 1, cacheRead: 0, cacheWrite: 0, contextTokens: 0, cost: { total: 3 } },
+				},
+			},
+			{
+				...assistant("a3", "a2", 4),
+				message: {
+					...assistant("a3", "a2", 4).message,
+					usage: { input: 4, output: 1, cacheRead: 0, cacheWrite: 0, contextTokens: 0, cost: { total: 4 } },
+				},
+			},
+		];
+		const file = await fixture("zero-context-cost", entries);
+		const timeline = await buildSessionContextTimeline(file);
+		expect(timeline.steps.map(step => step.id)).toEqual(["a1"]);
+		expect(timeline.agents[0]).toMatchObject({ requests: 1, costTotal: 0.25 });
+	});
+
 	it("keeps fleet cost over the full branch when steps are truncated", async () => {
 		const entries: unknown[] = [{ type: "session", id: "session-cost", cwd: "/work/project" }];
 		let parent: string | null = null;

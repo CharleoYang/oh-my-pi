@@ -78,9 +78,11 @@ function branchCost(entries: readonly JournalView[]): number {
 		const snapshot = message.contextSnapshot;
 		if (!snapshot) {
 			const usage = message.usage;
-			const prompt =
-				(usage?.contextTokens ?? 0) > 0 ||
-				(usage?.input ?? 0) + (usage?.cacheRead ?? 0) + (usage?.cacheWrite ?? 0) > 0;
+			const contextTokens = usage?.contextTokens;
+			const hasContextTokens = typeof contextTokens === "number" && Number.isFinite(contextTokens);
+			const prompt = hasContextTokens
+				? contextTokens > 0
+				: (usage?.input ?? 0) + (usage?.cacheRead ?? 0) + (usage?.cacheWrite ?? 0) > 0;
 			if (!prompt) continue;
 		}
 		const cost = message.usage?.cost?.total;
