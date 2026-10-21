@@ -4,6 +4,7 @@
 
 ### Added
 
+- Added the Context dashboard page with range-bounded KPIs, response-bucket heatmaps, and six-tab session detail (composition, trend, browser, events, files, and fleet).
 - Added a range-scoped Context overview API with root-session and child-transcript aggregation, activity heatmaps, prompt-token KPIs, and explicit totals for sessions beyond the 200-row limit.
 - Added `/api/session/context` and its stats client API: live-equivalent active-branch timelines, gzip-aware recursive fleet summaries, and root/child ETag revalidation with a bounded client cache. Timeline composition and browser details use the shared TUI fold; fleet peak uses its latest 1000-step window while cost covers the full active branch, and usage totals retain the shared fold's input/output/cache accounting.
 

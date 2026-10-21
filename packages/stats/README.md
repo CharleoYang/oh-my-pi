@@ -66,6 +66,8 @@ console.log(stats.byModel[0].avgTokensPerSecond);
 | `GET /api/events` | Server-sent live status: sync progress, data version, rollup backlog |
 | `GET /api/status` | Current live status (same shape as the events) |
 | `POST /api/sync` | Start a background sync; progress arrives on `/api/events` |
+| `GET /api/context/overview` | Range-scoped global context KPIs, heatmap, and sessions |
+| `GET /api/session/context` | Six-tab session context timeline and fleet detail |
 
 ## Data Storage
 
@@ -80,7 +82,7 @@ Range queries read `message_rollup` / `tool_rollup` / `session_rollup`, maintain
 
 ## Dashboard
 
-Pages: Overview, Models, Providers, Costs, Requests, Errors, Traces, Tools, Frustration, Projects and Gain. `1`–`6` pick the time range; `g` then a letter jumps to a page. Every page revalidates when the live data version moves, so there is no refresh button.
+Pages: Overview, Models, Providers, Costs, Requests, Errors, Traces, Context, Tools, Frustration, Projects and Gain. Context includes six-tab session detail (Composition, Trend, Browser, Events, Files and Fleet). `1`–`6` pick the time range; `g` then a letter jumps to a page.
 
 ## License
 

@@ -1,4 +1,5 @@
 import type {
+	ContextOverview,
 	ContextTimeline,
 	CostDashboardStats,
 	FolderStats,
@@ -18,6 +19,11 @@ import type {
 	TimeRange,
 	ToolDashboardStats,
 } from "./types";
+
+type ContextRange = Exclude<TimeRange, "all">;
+export function getContextOverview(range: ContextRange, signal?: AbortSignal): Promise<ContextOverview> {
+	return fetchJson<ContextOverview>(`${API_BASE}/context/overview?range=${encodeURIComponent(range)}`, { signal });
+}
 
 const API_BASE = "/api";
 
