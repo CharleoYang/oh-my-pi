@@ -1,12 +1,14 @@
 import { ArrowLeft } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { getSessionContext } from "../../api";
-import { formatCompact, formatInteger } from "../../data/formatters";
+import { formatCompact, formatCost, formatInteger } from "../../data/formatters";
 import { useQuery } from "../../data/query";
-import type { ContextTimeline } from "../../types";
+import type { ContextEvent, ContextTimeline } from "../../types";
 import { Badge, Card, ErrorState, PageHeader, QueryView, TableSkeleton } from "../../ui";
 import { BrowserTab } from "./BrowserTab";
 import { CompositionTab } from "./CompositionTab";
+import { ContextCurrentBar } from "./ContextCurrentBar";
+import { ContextTokenMix } from "./ContextTokenMix";
 import { EventsTab } from "./EventsTab";
 import { FilesTab } from "./FilesTab";
 import { FleetTab } from "./FleetTab";
@@ -28,6 +30,7 @@ export function ContextDetail({
 }) {
 	const [tab, setTab] = useState<ContextTab>("composition");
 	const [selected, setSelected] = useState(-1);
+	const [eventsKindFilter, setEventsKindFilter] = useState<string[]>([]);
 	const [rootFile, setRootFile] = useState(file);
 	const [displayFile, setDisplayFile] = useState(file);
 	const query = useQuery<ContextTimeline>(
@@ -39,6 +42,7 @@ export function ContextDetail({
 	useEffect(() => {
 		setSelected(-1);
 		setTab("composition");
+		setEventsKindFilter([]);
 	}, [displayFile]);
 	useEffect(() => {
 		setRootFile(file);
@@ -55,6 +59,7 @@ export function ContextDetail({
 			</div>
 		);
 	}
+	const latestStep = timeline?.steps.at(-1);
 	const currentStep = timeline
 		? Math.min(selected < 0 ? timeline.steps.length - 1 : selected, Math.max(0, timeline.steps.length - 1))
 		: 0;
@@ -62,6 +67,10 @@ export function ContextDetail({
 	const selectAgent = (agent: ContextTimeline["agents"][number]) => {
 		if (agent.status !== "subagent" || !agent.file) return;
 		setDisplayFile(agent.file);
+	};
+	const openEvent = (event: ContextEvent) => {
+		setTab("events");
+		setEventsKindFilter([event.kind]);
 	};
 	return (
 		<div className="stack context-detail">
@@ -95,11 +104,23 @@ export function ContextDetail({
 						<strong data-testid="context-detail-peak">{formatCompact(timeline.peakTokens)}</strong> peak prompt
 					</span>
 					<span>
-						<strong>{timeline.events.filter(event => event.kind === "compact").length}</strong> compactions
+						<strong>{formatCost(timeline.costTotal)}</strong> est. cost
 					</span>
 					{timeline.legacySteps > 0 && <Badge>legacy</Badge>}
 					{timeline.truncated && <Badge tone="warn">truncated</Badge>}
 					{timeline.detailsOmittedSteps > 0 && <Badge tone="warn">details omitted</Badge>}
+				</div>
+			)}
+			{timeline && <ContextCurrentBar step={latestStep} />}
+			{timeline && (
+				<div className="context-detail-stats">
+					<ContextStatsCard timeline={timeline} />
+					<ContextTokenMix
+						steps={timeline.steps}
+						omittedSteps={timeline.omittedSteps}
+						costTotal={timeline.costTotal}
+					/>
+					<TurnStatsCard timeline={timeline} />
 				</div>
 			)}
 			{timeline && (
@@ -130,11 +151,22 @@ export function ContextDetail({
 					tab === "composition" ? (
 						<CompositionTab timeline={data} selected={currentStep} onSelect={setSelected} />
 					) : tab === "trend" ? (
-						<TrendTab timeline={data} selected={currentStep} onSelect={setSelected} />
+						<TrendTab
+							timeline={data}
+							selected={currentStep}
+							onSelect={setSelected}
+							onOpenBrowser={() => setTab("browser")}
+							onOpenEvent={openEvent}
+						/>
 					) : tab === "browser" ? (
 						<BrowserTab timeline={data} selected={currentStep} onSelect={setSelected} />
 					) : tab === "events" ? (
-						<EventsTab timeline={data} onSelect={setSelected} />
+						<EventsTab
+							timeline={data}
+							onSelect={setSelected}
+							kindFilter={eventsKindFilter}
+							onKindFilterChange={setEventsKindFilter}
+						/>
 					) : tab === "files" ? (
 						<FilesTab timeline={data} onOpenTrace={() => onOpenTrace(displayFile)} />
 					) : (
@@ -143,5 +175,63 @@ export function ContextDetail({
 				}
 			</QueryView>
 		</div>
+	);
+}
+
+function ContextStatsCard({ timeline }: { timeline: ContextTimeline }) {
+	const steps = timeline.steps;
+	const avg = steps.length > 0 ? steps.reduce((sum, step) => sum + step.promptTokens, 0) / steps.length : 0;
+	const latest = steps.at(-1);
+	return (
+		<Card title="Context stats" className="context-stat-card">
+			<dl className="context-stat-list">
+				<div>
+					<dt>Latest prompt</dt>
+					<dd>{latest ? formatCompact(latest.promptTokens) : "—"}</dd>
+				</div>
+				<div>
+					<dt>Peak</dt>
+					<dd>{formatCompact(timeline.peakTokens)}</dd>
+				</div>
+				<div>
+					<dt>Average</dt>
+					<dd>{formatCompact(avg)}</dd>
+				</div>
+				<div>
+					<dt>Window</dt>
+					<dd>{timeline.contextWindow ? formatCompact(timeline.contextWindow) : "unknown"}</dd>
+				</div>
+			</dl>
+		</Card>
+	);
+}
+
+function TurnStatsCard({ timeline }: { timeline: ContextTimeline }) {
+	const largest = timeline.steps.reduce<{ value: number; index: number } | null>((best, step) => {
+		const value = Math.abs(step.deltaTokens ?? 0);
+		return best === null || value > best.value ? { value, index: step.index } : best;
+	}, null);
+	const totalRequests = timeline.steps.length + timeline.omittedSteps;
+	return (
+		<Card title="Turn stats" className="context-stat-card">
+			<dl className="context-stat-list">
+				<div>
+					<dt>Steps</dt>
+					<dd>{formatInteger(totalRequests)}</dd>
+				</div>
+				<div>
+					<dt>Largest jump</dt>
+					<dd>{largest ? `${formatCompact(largest.value)} (#${largest.index})` : "—"}</dd>
+				</div>
+				<div>
+					<dt>Cost / request</dt>
+					<dd>{totalRequests > 0 ? formatCost(timeline.costTotal / totalRequests) : "—"}</dd>
+				</div>
+				<div>
+					<dt>Compactions</dt>
+					<dd>{timeline.events.filter(event => event.kind === "compact").length}</dd>
+				</div>
+			</dl>
+		</Card>
 	);
 }

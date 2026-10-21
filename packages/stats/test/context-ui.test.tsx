@@ -141,6 +141,7 @@ const timeline: ContextTimeline = {
 			unattributed: 0,
 			contextWindow: 1000,
 			deltaKind: "first",
+			usage: { input: 20, output: 5, cacheRead: 10, cacheWrite: 5, total: 40, costTotal: 0.01 },
 			eventIds: [],
 			filePaths: ["src/a.ts"],
 		},
@@ -166,6 +167,7 @@ const timeline: ContextTimeline = {
 			contextWindow: 1000,
 			deltaTokens: 20,
 			deltaKind: "grow",
+			usage: { input: 20, output: 5, cacheRead: 10, cacheWrite: 5, total: 40, costTotal: 0.01 },
 			eventIds: ["e"],
 			filePaths: ["src/a.ts"],
 		},
@@ -176,7 +178,7 @@ const timeline: ContextTimeline = {
 	contextWindow: 1000,
 	peakTokens: 120,
 	peakTokensTotal: 120,
-	costTotal: 0,
+	costTotal: 0.02,
 	events: [{ id: "e", timestamp: 1_700_000_001_000, kind: "compact", label: "Compaction", stepIndex: 1 }],
 	omittedEvents: 0,
 	files: [
@@ -357,6 +359,112 @@ describe("Context page", () => {
 		expect(container.textContent).toContain("child");
 		expect(container.textContent).not.toContain("message body");
 	});
+
+	it("keeps the current bar on the latest step when an earlier step is selected", async () => {
+		const container = await renderRoute("/tmp/detail.jsonl");
+		expect(container.textContent).toContain("Current context");
+		expect(container.textContent).toContain("Step #1 · latest");
+		expect(container.querySelector('[data-testid="context-current-reserve"]')).toBeTruthy();
+		const first = [...container.querySelectorAll("button")].find(button => button.textContent?.startsWith("#0"));
+		if (!first) throw new Error("step selector missing");
+		await act(async () => {
+			first.click();
+		});
+		expect(container.textContent).toContain("Step #1 · latest");
+	});
+
+	it("does not substitute timeline composition for a legacy latest step", async () => {
+		const file = `/tmp/legacy-${++sequence}.jsonl`;
+		const legacy = {
+			...timeline,
+			file,
+			steps: [{ ...timeline.steps[1]!, composition: undefined, compositionEstimated: undefined }],
+			composition: timeline.composition,
+		} as ContextTimeline;
+		const container = await renderRoute(file, "24h", [], legacy);
+		expect(container.textContent).toContain("Composition unavailable for this legacy step.");
+		expect(container.querySelectorAll(".context-current-seg")).toHaveLength(0);
+	});
+
+
+	it("bounds current segments and reserve under estimate overshoot", async () => {
+		const file = `/tmp/overshoot-${++sequence}.jsonl`;
+		const step = {
+			...timeline.steps[1]!,
+			promptTokens: 80,
+			contextWindow: 100,
+			composition: { systemPrompt: 20, systemTools: 20, systemContext: 20, skills: 20, messages: 10 },
+			unattributed: -10,
+		};
+		const container = await renderRoute(file, "24h", [], { ...timeline, file, steps: [step] });
+		expect(container.textContent).toContain("estimate overshoot");
+		const widths = [...container.querySelectorAll<HTMLElement>(".context-current-seg")].map(element =>
+			Number.parseFloat(element.style.width),
+		);
+		expect(widths.reduce((sum, width) => sum + width, 0)).toBeLessThanOrEqual(100.01);
+	});
+
+	it("renders an empty zero-prompt track without NaN widths", async () => {
+		const file = `/tmp/zero-${++sequence}.jsonl`;
+		const step = {
+			...timeline.steps[1]!,
+			promptTokens: 0,
+			contextWindow: 100,
+			composition: { systemPrompt: 0, systemTools: 0, systemContext: 0, skills: 0, messages: 0 },
+			unattributed: 0,
+		};
+		const container = await renderRoute(file, "24h", [], { ...timeline, file, steps: [step] });
+		expect(container.textContent).toContain("No prompt tokens recorded");
+		expect(container.querySelectorAll(".context-current-seg:not(.context-current-reserve)")).toHaveLength(0);
+		expect(container.textContent).not.toContain("NaN");
+	});
+
+	it("renders token mix, turn stats and no latency claim", async () => {
+		const container = await renderRoute("/tmp/detail.jsonl");
+		expect(container.textContent).toContain("Token mix");
+		expect(container.textContent).toContain("Turn stats");
+		expect(container.textContent).toContain("Cache read");
+		expect(container.textContent).not.toContain("TTFT");
+		expect(container.textContent).not.toContain("latency");
+	});
+
+	it("routes a step event chip to Events with its kind active", async () => {
+		const container = await renderRoute("/tmp/detail.jsonl");
+		const trend = [...container.querySelectorAll("button")].find(button => button.textContent === "Trend");
+		if (!trend) throw new Error("Trend tab missing");
+		await act(async () => {
+			trend.click();
+		});
+		const event = [...container.querySelectorAll("button")].find(button => button.textContent?.includes("Compaction"));
+		if (!event) throw new Error("event chip missing");
+		await act(async () => {
+			event.click();
+		});
+		const events = [...container.querySelectorAll("button")].find(button => button.textContent === "Events");
+		expect(events?.className).toContain("active");
+	});
+
+	it("shows only named browser details, never injected private content", async () => {
+		const file = `/tmp/private-${++sequence}.jsonl`;
+		const withSecret = {
+			...timeline,
+			file,
+			steps: timeline.steps.map(step => ({
+				...step,
+				details: { ...step.details!, content: "SECRET_PROMPT_BODY", args: "SECRET_ARGS" },
+			})),
+		} as ContextTimeline;
+		const container = await renderRoute(file, "24h", [], withSecret);
+		const browser = [...container.querySelectorAll("button")].find(button => button.textContent === "Browser");
+		if (!browser) throw new Error("Browser tab missing");
+		await act(async () => {
+			browser.click();
+		});
+		expect(container.textContent).toContain("Names and token counts only");
+		expect(container.textContent).not.toContain("SECRET_PROMPT_BODY");
+		expect(container.textContent).not.toContain("SECRET_ARGS");
+	});
+
 	it("drills into a fleet child by its actual filename", async () => {
 		const requests: string[] = [];
 		const container = await renderRoute("/tmp/detail.jsonl", "24h", requests);

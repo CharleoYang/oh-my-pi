@@ -1,11 +1,21 @@
-import { useMemo, useState } from "react";
+import { useMemo } from "react";
 import { formatTimestamp } from "../../data/formatters";
 import { Badge, Card, type Column, Table } from "../../ui";
 import type { ContextEvent, ContextTimeline } from "../../types";
 import { eventKinds, filterContextEvents } from "./view-models";
 
-export function EventsTab({ timeline, onSelect }: { timeline: ContextTimeline; onSelect: (index: number) => void }) {
-	const [selectedKinds, setSelectedKinds] = useState<string[]>([]);
+export function EventsTab({
+	timeline,
+	onSelect,
+	kindFilter,
+	onKindFilterChange,
+}: {
+	timeline: ContextTimeline;
+	onSelect: (index: number) => void;
+	kindFilter: readonly string[];
+	onKindFilterChange: (kinds: string[]) => void;
+}) {
+	const selectedKinds = kindFilter;
 	const kinds = useMemo(() => eventKinds(timeline.events), [timeline.events]);
 	const events = useMemo(() => filterContextEvents(timeline.events, selectedKinds), [timeline.events, selectedKinds]);
 	const columns = useMemo<Column<ContextEvent>[]>(
@@ -66,8 +76,10 @@ export function EventsTab({ timeline, onSelect }: { timeline: ContextTimeline; o
 						data-active={selectedKinds.includes(kind)}
 						key={kind}
 						onClick={() =>
-							setSelectedKinds(current =>
-								current.includes(kind) ? current.filter(item => item !== kind) : [...current, kind],
+							onKindFilterChange(
+								selectedKinds.includes(kind)
+									? selectedKinds.filter(item => item !== kind)
+									: [...selectedKinds, kind],
 							)
 						}
 					>
