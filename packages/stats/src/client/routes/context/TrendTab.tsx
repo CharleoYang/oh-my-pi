@@ -53,7 +53,8 @@ export function TrendTab({
 		];
 	}, [steps]);
 	const briefStep = timeline.steps[selected] ?? steps.at(-1);
-	const contextWindow = briefStep?.contextWindow && briefStep.contextWindow > 0 ? briefStep.contextWindow : undefined;
+	const latestWindow = timeline.steps.at(-1)?.contextWindow ?? timeline.contextWindow;
+	const contextWindow = latestWindow && latestWindow > 0 ? latestWindow : undefined;
 	return (
 		<section className="card context-trend">
 			<header className="card-header">
