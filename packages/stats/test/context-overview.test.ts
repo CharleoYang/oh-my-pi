@@ -61,6 +61,33 @@ describe("context overview", () => {
 		expect(overview.sessions.map(row => row.file)).toEqual([inside]);
 	});
 
+	it("normalizes dot segments in-root without rejecting dot-named projects", async () => {
+		await initDb();
+		const now = Date.now();
+		const prefix = `${getSessionsDir()}${path.sep}`;
+		const combined = `${prefix}project${path.sep}a${path.sep}..${path.sep}b.jsonl`;
+		const dotted = `${prefix}project${path.sep}.${path.sep}c.jsonl`;
+		const literal = `${prefix}...${path.sep}literal.jsonl`;
+		const hidden = `${prefix}.hidden${path.sep}h.jsonl`;
+		insertMessageStats([
+			message(combined, "combined", now - HOUR_MS, 100),
+			message(dotted, "dotted", now - HOUR_MS, 200),
+			message(literal, "literal", now - HOUR_MS, 300),
+			message(hidden, "hidden", now - HOUR_MS, 400),
+		]);
+
+		const overview = await getContextOverview("24h");
+		expect(overview.kpi.requests).toBe(4);
+		expect(overview.sessions.map(row => row.file).sort()).toEqual(
+			[
+				path.join(prefix, "...", "literal.jsonl"),
+				path.join(prefix, ".hidden", "h.jsonl"),
+				path.join(prefix, "project", "b.jsonl"),
+				path.join(prefix, "project", "c.jsonl"),
+			].sort(),
+		);
+	});
+
 	it("uses range activity and folds child requests into their root", async () => {
 		await initDb();
 		const now = Date.now();

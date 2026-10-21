@@ -22,6 +22,15 @@ interface RootBucketRow {
 	models: string;
 }
 
+/** Normalize a transcript path and fold it to its root session, or null when it escapes. */
+function contextRootFile(file: string, sessionsPrefix: string): string | null {
+	const normalized = path.normalize(file);
+	if (!normalized.startsWith(sessionsPrefix)) return null;
+	const segments = normalized.slice(sessionsPrefix.length).split(path.sep);
+	if (segments.length < 2 || segments[0]!.length === 0) return null;
+	return segments.length === 2 ? normalized : path.join(sessionsPrefix, segments[0]!, `${segments[1]!}.jsonl`);
+}
+
 /** Read exact range facts once, then project the same snapshot into all three views. */
 export async function getContextOverview(range: TimeRange): Promise<ContextOverview> {
 	const database = await initDb();
@@ -34,34 +43,17 @@ export async function getContextOverview(range: TimeRange): Promise<ContextOverv
 	// remain exact without reading lifetime session rollups or individual requests.
 	const facts = database
 		.query<RootBucketRow, Record<string, string | number>>(`
-			WITH paths AS (
-				SELECT *, substr(session_file, length($prefix) + 1) AS relative_file
-				FROM messages
-				WHERE timestamp >= $cutoff AND substr(session_file, 1, length($prefix)) = $prefix
-					AND instr($separator || relative_file || $separator, $separator || '..' || $separator) = 0
-					AND instr($separator || relative_file || $separator, $separator || '.' || $separator) = 0
-			), folders AS (
-				SELECT *, instr(relative_file, $separator) AS folder_end
-				FROM paths WHERE substr(relative_file, 1, 2) <> '..'
-			), transcripts AS (
-				SELECT *, substr(relative_file, folder_end + 1) AS transcript
-				FROM folders WHERE folder_end > 0
-			), roots AS (
-				SELECT *, CASE WHEN instr(transcript, $separator) > 0
-					THEN $prefix || substr(relative_file, 1, folder_end) ||
-						substr(transcript, 1, instr(transcript, $separator) - 1) || '.jsonl'
-					ELSE session_file END AS root_file
-				FROM transcripts
-			)
-			SELECT root_file AS file, (timestamp / $bucketMs) * $bucketMs AS bucket,
+			SELECT session_file AS file, (timestamp / $bucketMs) * $bucketMs AS bucket,
 				COUNT(*) AS requests, SUM(total_tokens) AS totalTokens,
 				SUM(input_tokens + cache_read_tokens + cache_write_tokens) AS promptTokens,
 				MAX(input_tokens + cache_read_tokens + cache_write_tokens) AS peakPromptTokens,
 				MIN(timestamp) AS startedAt, MAX(timestamp) AS endedAt,
 				json_group_array(DISTINCT model) AS models
-			FROM roots GROUP BY root_file, bucket
+			FROM messages
+			WHERE timestamp >= $cutoff AND substr(session_file, 1, length($prefix)) = $prefix
+			GROUP BY session_file, bucket
 		`)
-		.all({ $prefix: sessionsPrefix, $separator: path.sep, $cutoff: cutoff, $bucketMs: heatmapBucketMs });
+		.all({ $prefix: sessionsPrefix, $cutoff: cutoff, $bucketMs: heatmapBucketMs });
 
 	const byRoot = new Map<string, ContextSessionRow & { modelSet: Set<string> }>();
 	const byBucket = new Map<number, ContextOverview["heatmap"][number]>();
@@ -73,7 +65,10 @@ export async function getContextOverview(range: TimeRange): Promise<ContextOverv
 		totalTokens: 0,
 	};
 	let promptTokens = 0;
-	for (const fact of facts) {
+	for (const rawFact of facts) {
+		const file = contextRootFile(rawFact.file, sessionsPrefix);
+		if (!file) continue;
+		const fact = { ...rawFact, file };
 		kpi.requests += fact.requests;
 		kpi.totalTokens += fact.totalTokens;
 		kpi.peakPromptTokens = Math.max(kpi.peakPromptTokens, fact.peakPromptTokens);
