@@ -31,6 +31,13 @@ export function ContextActivityGrid({
 }) {
 	const refs = useRef(new Map<string, HTMLButtonElement>());
 	const gridRef = useRef<HTMLDivElement | null>(null);
+	const lastFocusCell = useRef<ContextActivityCell | undefined>(undefined);
+	// Capture ownership during render: by the time the effect runs after a range
+	// change, React has already removed the previously focused button.
+	const focusWasInside = useRef(false);
+	if (typeof document !== "undefined") {
+		focusWasInside.current = gridRef.current?.contains(document.activeElement) ?? false;
+	}
 	const [focusKey, setFocusKey] = useState<string | null>(cells[0]?.key ?? null);
 	const daily = overview.range === "30d" || overview.range === "90d";
 	const oneHour = overview.range === "1h";
@@ -43,10 +50,11 @@ export function ContextActivityGrid({
 			return;
 		}
 		if (focusKey && cells.some(cell => cell.key === focusKey)) return;
-		const wasInside = gridRef.current?.contains(document.activeElement) ?? false;
-		const next = cells[0]!.key;
-		setFocusKey(next);
-		if (wasInside) requestAnimationFrame(() => refs.current.get(next)?.focus());
+		const previous = lastFocusCell.current;
+		const next =
+			(previous && cells.find(cell => previous.start >= cell.start && previous.start < cell.end)) ?? cells[0]!;
+		setFocusKey(next.key);
+		if (focusWasInside.current) requestAnimationFrame(() => refs.current.get(next.key)?.focus());
 	}, [cells, focusKey]);
 
 	const rows = useMemo(() => {
@@ -157,7 +165,10 @@ export function ContextActivityGrid({
 										aria-selected={selectedKey === cell.key}
 										aria-label={`${cell.label}: ${formatCompact(cell[metric])} ${metric}${cell.partial ? ", partial" : ""}`}
 										tabIndex={cell.key === tabbableKey ? 0 : -1}
-										onFocus={() => setFocusKey(cell.key)}
+										onFocus={() => {
+											lastFocusCell.current = cell;
+											setFocusKey(cell.key);
+										}}
 										onKeyDown={event => onKeyDown(cell, event)}
 										onClick={() => onSelect(cell)}
 									/>
