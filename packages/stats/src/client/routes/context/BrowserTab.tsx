@@ -9,10 +9,12 @@ export function BrowserTab({
 	timeline,
 	selected,
 	onSelect,
+	onOpenTrend,
 }: {
 	timeline: ContextTimeline;
 	selected: number;
 	onSelect: (index: number) => void;
+	onOpenTrend?: (index: number) => void;
 }) {
 	const [query, setQuery] = useState("");
 	const [category, setCategory] = useState<string | null>(null);
@@ -66,7 +68,22 @@ export function BrowserTab({
 			<Card
 				title="Context details"
 				description={`Step #${step?.index ?? "—"}`}
-				actions={<SearchInput value={query} onChange={setQuery} placeholder="Search names" width={220} />}
+				actions={
+					<div className="context-browser-actions">
+						<SearchInput value={query} onChange={setQuery} placeholder="Search names" width={220} />
+						{onOpenTrend && (
+							<button
+								type="button"
+								className="btn"
+								data-size="sm"
+								data-variant="ghost"
+								onClick={() => onOpenTrend(selected)}
+							>
+								Open in Trend
+							</button>
+						)}
+					</div>
+				}
 			>
 				{!step || !details ? (
 					<ContextNotice tone="info">Details unavailable for this step.</ContextNotice>

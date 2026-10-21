@@ -5,6 +5,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { getSessionContext } from "../src/client/api";
 import { ContextRoute } from "../src/client/routes/ContextRoute";
 import { ContextActivityGrid } from "../src/client/routes/context/ContextActivityGrid";
+import { FilesTab } from "../src/client/routes/context/FilesTab";
 import { buildActivityCells } from "../src/client/routes/context/view-models";
 import type { ContextOverview, ContextTimeline } from "../src/client/types";
 
@@ -199,6 +200,18 @@ const timeline: ContextTimeline = {
 	omittedFiles: 0,
 	incompleteFileCalls: 1,
 	agents: [
+		{
+			trackId: "main",
+			file: "/tmp/detail.jsonl",
+			label: "Main",
+			agent: "main",
+			model: "model-a",
+			requests: 2,
+			peakTokens: 120,
+			lastTokens: 120,
+			status: "main",
+			costTotal: 0.02,
+		},
 		{
 			trackId: "child",
 			file: "/tmp/child.jsonl",
@@ -490,13 +503,94 @@ describe("Context page", () => {
 		await act(async () => {
 			fleet.click();
 		});
-		const row = container.querySelector("tbody tr");
-		if (!row) throw new Error("fleet row missing");
+		expect(container.querySelectorAll('[data-testid="fleet-main"]')).toHaveLength(1);
+		expect(container.querySelector('[data-testid="fleet-graph"]')?.getAttribute("data-logical-edges")).toBe(
+			"main->child",
+		);
+		const node = container.querySelector('[data-track-id="child"]');
+		if (!node) throw new Error("fleet node missing");
 		await act(async () => {
-			(row as HTMLElement).click();
+			(node as HTMLElement).click();
 		});
 		expect(requests.some(url => url.includes("file=%2Ftmp%2Fchild.jsonl"))).toBe(true);
 		expect(container.textContent).toContain("Viewing subagent");
+	});
+
+
+	it("keeps every fleet child in the logical edge set and in the table fallback", async () => {
+		const file = `/tmp/fleet-${++sequence}.jsonl`;
+		const detail: ContextTimeline = {
+			...timeline,
+			file,
+			agents: [
+				{ ...timeline.agents[0]!, trackId: "main", label: "Main", status: "main", requests: 6 },
+				{ ...timeline.agents[1]!, trackId: "child-b", label: "child-b", requests: 4 },
+				{ ...timeline.agents[1]!, trackId: "child-a", label: "child-a", requests: 1 },
+				{
+					...timeline.agents[1]!,
+					trackId: "advisor",
+					label: "advisor",
+					agent: "advisor",
+					status: "advisor",
+					requests: 2,
+				},
+			],
+		};
+		const container = await renderRoute(file, "24h", [], detail);
+		const fleet = [...container.querySelectorAll("button")].find(button => button.textContent === "Fleet");
+		if (!fleet) throw new Error("Fleet tab missing");
+		await act(async () => {
+			fleet.click();
+		});
+		const graph = container.querySelector('[data-testid="fleet-graph"]');
+		expect(container.querySelectorAll('[data-testid="fleet-main"]')).toHaveLength(1);
+		expect(container.querySelectorAll("[data-track-id]")).toHaveLength(4);
+		expect(
+			[...container.querySelectorAll("[data-track-id]")]
+				.map(element => element.getAttribute("data-track-id"))
+				.sort(),
+		).toEqual(["advisor", "child-a", "child-b", "main"]);
+		expect(graph?.getAttribute("data-logical-edges")?.split(",")).toHaveLength(3);
+		expect(new Set(graph?.getAttribute("data-logical-edges")?.split(","))).toHaveLength(3);
+		const table = [...container.querySelectorAll("button")].find(button => button.textContent === "Table");
+		if (!table) throw new Error("Table view missing");
+		await act(async () => {
+			table.click();
+		});
+		expect(container.querySelectorAll("tbody tr")).toHaveLength(4);
+	});
+
+	it("isolates the files open-trace control from row activation", async () => {
+		const onOpenTrace = vi.fn();
+		const container = setupDom();
+		await act(async () => {
+			root?.render(<FilesTab timeline={timeline} onOpenTrace={onOpenTrace} />);
+		});
+		expect(container.querySelector(".context-file-activity")?.getAttribute("aria-label")).toBe(
+			"1 reads, 1 writes, 0 edits, 0 searches",
+		);
+		expect(container.querySelector(".context-file-counts")?.textContent).toBe("1100");
+		const open = container.querySelector<HTMLButtonElement>('button[aria-label^="Open trace for"]');
+		if (!open) throw new Error("open trace button missing");
+		await act(async () => {
+			open.click();
+		});
+		expect(onOpenTrace).toHaveBeenCalledTimes(1);
+		for (const key of ["Enter", " "]) {
+			const EventCtor = (globalThis.window as unknown as { Event: typeof Event }).Event;
+			const keydown = new EventCtor("keydown", { bubbles: true });
+			Object.defineProperty(keydown, "key", { value: key });
+			await act(async () => {
+				open.dispatchEvent(keydown);
+			});
+		}
+		expect(onOpenTrace).toHaveBeenCalledTimes(1);
+		const row = container.querySelector("tbody tr");
+		if (!row) throw new Error("file row missing");
+		await act(async () => {
+			(row as HTMLElement).click();
+		});
+		expect(onOpenTrace).toHaveBeenCalledTimes(2);
 	});
 
 	it("rejects unsupported timeline schemas before rendering fields", async () => {
@@ -528,6 +622,32 @@ describe("Context page", () => {
 		expect(negative).toBeTruthy();
 		expect(negative?.style.right).toBe("50%");
 		expect(negative?.style.width).toBe("50%");
+	});
+
+
+	it("keeps the selected step across Browser and Trend", async () => {
+		const container = await renderRoute("/tmp/detail.jsonl");
+		const browser = [...container.querySelectorAll("button")].find(button => button.textContent === "Browser");
+		if (!browser) throw new Error("Browser tab missing");
+		await act(async () => {
+			browser.click();
+		});
+		const toTrend = [...container.querySelectorAll("button")].find(button => button.textContent === "Open in Trend");
+		if (!toTrend) throw new Error("Open in Trend missing");
+		await act(async () => {
+			toTrend.click();
+		});
+		expect(container.querySelector('[data-testid="context-tab-trend"]')?.getAttribute("aria-selected")).toBe("true");
+		expect(container.textContent).toContain("Step #1");
+		const toBrowser = [...container.querySelectorAll("button")].find(
+			button => button.textContent === "Open in Browser",
+		);
+		if (!toBrowser) throw new Error("Open in Browser missing");
+		await act(async () => {
+			toBrowser.click();
+		});
+		expect(container.querySelector('[data-testid="context-tab-browser"]')?.getAttribute("aria-selected")).toBe("true");
+		expect(container.querySelector(".context-browser")?.textContent).toContain("Step #1");
 	});
 
 	it("renders system-part details in the Browser tab", async () => {
