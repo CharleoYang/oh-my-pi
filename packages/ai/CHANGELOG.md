@@ -7,6 +7,7 @@
 - Fixed Factory Droid Core models (Kimi, GLM, DeepSeek and others) dropping calls to tools with names over 64 characters and their results from later requests; such names now shorten to 64 characters, and shorter names are sent unchanged ([#16384](https://github.com/can1357/oh-my-pi/pull/16384) by [@will-bogusz](https://github.com/will-bogusz))
 ### Added
 
+- MiniMax Token Plan usage now covers the China provider (`minimax-code-cn`, `api.minimaxi.com`), so `omp usage` reads its rolling and weekly quotas without issuing a model request ([#16615](https://github.com/can1357/oh-my-pi/pull/16615) by [@CharleoYang](https://github.com/CharleoYang))
 - Added opt-in `reclaimAbovePct` to `auth.accountPolicies`: sessions automatically moved to a lower-priority account return to the preferred one once it has that much quota left ([#14237](https://github.com/can1357/oh-my-pi/pull/14237) by [@will-bogusz](https://github.com/will-bogusz))
 - Added `reachesBudgetedHost()`: whether the catalog's host request budgets (inline image bytes, official image count) apply to a request, true on a model's official endpoint and on Factory Droid's own hosts ([#16288](https://github.com/can1357/oh-my-pi/pull/16288) by [@will-bogusz](https://github.com/will-bogusz))
 ### Fixed
