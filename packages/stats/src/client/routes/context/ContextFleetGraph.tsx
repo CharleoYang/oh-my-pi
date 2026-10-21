@@ -23,7 +23,6 @@ export function ContextFleetGraph({
 				.sort((a, b) => b.requests - a.requests || a.label.localeCompare(b.label)),
 		[timeline.agents],
 	);
-	const graphRef = useRef<HTMLDivElement | null>(null);
 	const canvasRef = useRef<HTMLDivElement | null>(null);
 	const laneRef = useRef<HTMLDivElement | null>(null);
 	const mainRef = useRef<HTMLDivElement | null>(null);
@@ -96,7 +95,6 @@ export function ContextFleetGraph({
 		<div className="context-fleet-graph-scroll">
 			<div
 				className="context-fleet-graph"
-				ref={graphRef}
 				role="group"
 				aria-label="Fleet graph: one session and its child transcripts"
 				data-testid="fleet-graph"
@@ -140,7 +138,7 @@ export function ContextFleetGraph({
 								key={agent.trackId}
 								data-track-id={agent.trackId}
 								data-status={agent.status}
-								aria-label={`${agent.label}, ${agent.agent ?? "unknown agent"}, ${agent.model ?? "unknown model"}, ${agent.requests} requests`}
+								aria-label={`${agent.label}, ${agent.agent ?? "unknown agent"}, ${agent.model ?? "unknown model"}, ${agent.requests} requests, ${agent.lastTokens === undefined ? "unknown" : formatCompact(agent.lastTokens)} last tokens`}
 								onClick={() => onOpenAgent(agent)}
 								onMouseEnter={() => setHovered(agent.trackId)}
 								onMouseLeave={() => setHovered(null)}
