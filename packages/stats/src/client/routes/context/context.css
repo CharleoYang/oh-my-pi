@@ -50,7 +50,7 @@
 	font-size: 12px;
 }
 .context-detail-header strong {
-	color: var(--ink);
+	color: var(--ink-1);
 	font-family: var(--font-mono);
 	font-size: 15px;
 }
@@ -73,7 +73,7 @@
 }
 .context-tab:hover,
 .context-tab.active {
-	color: var(--ink);
+	color: var(--ink-1);
 	border-bottom-color: var(--context-accent);
 }
 .context-tab-stack,
@@ -108,7 +108,7 @@
 }
 .context-step.active {
 	border-color: var(--context-accent);
-	color: var(--ink);
+	color: var(--ink-1);
 	box-shadow: inset 0 0 0 1px var(--context-accent);
 }
 .context-waffle {
@@ -177,7 +177,7 @@
 .context-browser-step:hover,
 .context-browser-step.active {
 	background: var(--line-1);
-	color: var(--ink);
+	color: var(--ink-1);
 }
 .context-browser-step span,
 .context-browser-step strong {
@@ -211,7 +211,7 @@
 	margin-bottom: 10px;
 }
 .context-kind-chips .badge[data-active="true"] {
-	color: var(--ink);
+	color: var(--ink-1);
 	border-color: var(--context-accent);
 	background: color-mix(in srgb, var(--context-accent) 18%, var(--panel));
 }
