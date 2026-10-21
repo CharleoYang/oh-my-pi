@@ -291,6 +291,18 @@ describe("foldContextTimeline", () => {
 		expect(timeline.steps[0]?.eventIds).toEqual([]);
 	});
 
+	test("keeps cost across the step cap", () => {
+		const timeline = foldContextTimeline(
+			input({
+				entries: [assistant("a1", 1, 10, []), assistant("a2", 2, 20, []), assistant("a3", 3, 30, [])],
+				limits: { maxSteps: 1 },
+			}),
+		);
+		expect(timeline.steps.map(step => step.id)).toEqual(["a3"]);
+		expect(timeline.omittedSteps).toBe(2);
+		expect(timeline.costTotal).toBe(0.75);
+	});
+
 	test("zero step and event limits return empty windows", () => {
 		const timeline = foldContextTimeline(
 			input({

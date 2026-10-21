@@ -139,6 +139,8 @@ export interface ContextTimeline {
 	composition?: ContextCategoryTokens;
 	contextWindow?: number;
 	peakTokens: number;
+	/** Usage cost across every eligible step, including steps beyond `maxSteps`. */
+	costTotal: number;
 	events: ContextEvent[];
 	omittedEvents: number;
 	files: ContextFileActivity[];

@@ -51,6 +51,46 @@ function request(file: string, etag?: string) {
 }
 
 describe("session context", () => {
+	it("matches the fold cost oracle across mixed usage shapes", async () => {
+		const shapes = [
+			{ contextTokens: 0.5, input: 100, cost: 7 },
+			{ input: -5, cacheRead: 2, cost: 7 },
+			{ contextTokens: Number.NaN, input: 3, cost: 2 },
+			{ contextTokens: undefined, input: 0, cacheRead: 0, cost: 9 },
+			{ contextTokens: 2.9, input: 100, cost: 3 },
+			{ contextTokens: 0, input: 100, cost: 11 },
+		];
+		const entries: unknown[] = [{ type: "session", id: "session-mixed-cost", cwd: "/work/project" }];
+		let parent: string | null = null;
+		for (const [index, shape] of shapes.entries()) {
+			const id = `m${index}`;
+			const base = assistant(id, parent, 10);
+			entries.push({
+				...base,
+				message: {
+					...base.message,
+					usage: {
+						input: shape.input,
+						output: 1,
+						...(shape.cacheRead !== undefined ? { cacheRead: shape.cacheRead } : {}),
+						...(shape.contextTokens !== undefined ? { contextTokens: shape.contextTokens } : {}),
+						cost: { total: shape.cost },
+					},
+				},
+			});
+			parent = id;
+		}
+		const file = await fixture("mixed-cost", entries);
+		const timeline = await buildSessionContextTimeline(file);
+		const oracle = foldContextTimeline({
+			sessionId: "session-mixed-cost",
+			source: "journal",
+			entries: entries.slice(1) as never,
+		});
+		expect(timeline.agents[0]?.costTotal).toBe(oracle.costTotal);
+		expect(timeline.agents[0]?.requests).toBe(oracle.steps.length + oracle.omittedSteps);
+	});
+
 	it("excludes zero-context-token assistants from fleet cost", async () => {
 		const entries: unknown[] = [
 			{ type: "session", id: "session-zero-context", cwd: "/work/project" },
