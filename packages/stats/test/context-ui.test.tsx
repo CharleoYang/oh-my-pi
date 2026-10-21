@@ -4,6 +4,8 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { getSessionContext } from "../src/client/api";
 import { ContextRoute } from "../src/client/routes/ContextRoute";
+import { ContextActivityGrid } from "../src/client/routes/context/ContextActivityGrid";
+import { buildActivityCells } from "../src/client/routes/context/view-models";
 import type { ContextOverview, ContextTimeline } from "../src/client/types";
 
 type FetchInput = string | URL | Request;
@@ -47,29 +49,66 @@ function setupDom(): HTMLElement {
 }
 
 function makeOverview(range: ContextOverview["range"] = "24h"): ContextOverview {
+	const now = Date.now();
+	const cutoff = now - 24 * 60 * 60 * 1000;
+	const bucket = Math.floor((now - 60 * 60 * 1000) / 3_600_000) * 3_600_000;
 	return {
 		range,
-		cutoff: 1_700_000_000_000,
+		cutoff,
 		heatmapBucketMs: 3_600_000,
-		kpi: { sessions: 2, requests: 3, avgPromptTokens: 120, peakPromptTokens: 240, totalTokens: 600 },
-		heatmap: [{ bucket: 1_700_000_000_000, requests: 2, promptTokens: 240 }],
+		kpi: {
+			sessions: 2,
+			requests: 3,
+			avgPromptTokens: 120,
+			peakPromptTokens: 240,
+			totalTokens: 600,
+			promptTokens: 360,
+			inputTokens: 240,
+			outputTokens: 60,
+			cacheReadTokens: 100,
+			cacheWriteTokens: 20,
+			cacheRate: 100 / 340,
+			costTotal: 0.12,
+			unpricedRequests: 1,
+		},
+		heatmap: [
+			{
+				bucket,
+				requests: 3,
+				promptTokens: 360,
+				outputTokens: 60,
+				totalTokens: 600,
+				costTotal: 0.12,
+				unpricedRequests: 1,
+			},
+		],
+		models: [
+			{ model: "model-a", requests: 3, promptTokens: 360, totalTokens: 600, costTotal: 0.12, unpricedRequests: 1 },
+		],
 		sessions: [
 			{
 				file: `/tmp/context-${++sequence}.jsonl`,
 				folder: "/tmp",
 				title: "Context test",
 				models: ["model-a"],
-				startedAt: 1_700_000_000_000,
-				endedAt: 1_700_000_010_000,
+				startedAt: now - 2 * 60 * 60 * 1000,
+				endedAt: now - 30 * 60 * 1000,
 				requests: 2,
 				totalTokens: 300,
 				promptTokens: 200,
 				peakPromptTokens: 180,
 				avgPromptTokens: 100,
+				inputTokens: 120,
+				outputTokens: 30,
+				cacheReadTokens: 50,
+				cacheWriteTokens: 10,
+				costTotal: 0.12,
+				unpricedRequests: 1,
+				sparkline: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 100, 100],
 			},
 		],
 		omittedSessions: 1,
-		omittedRequests: 4,
+		omittedRequests: 1,
 		omittedPromptTokens: 10,
 	};
 }
@@ -219,12 +258,73 @@ afterEach(async () => {
 });
 
 describe("Context page", () => {
-	it("renders KPI values, densified heatmap and omission text", async () => {
+	it("renders KPI values, activity cells, session cards and omission text", async () => {
 		const container = await renderRoute();
-		expect(container.textContent).toContain("Sessions");
-		expect(container.textContent).toContain("2");
+		for (const label of ["Sessions", "Requests", "Prompt tokens", "Cache rate", "Est. cost", "Peak prompt"])
+			expect(container.textContent).toContain(label);
 		expect(container.textContent).toContain("+1 sessions");
-		expect(container.querySelectorAll(".context-heatmap-cell").length).toBeGreaterThan(1);
+		expect(container.querySelectorAll(".context-activity-cell").length).toBeGreaterThan(1);
+		expect(container.querySelectorAll(".context-session-card")).toHaveLength(1);
+		expect(container.textContent).toContain("~$0.12");
+	});
+
+
+
+	it("re-establishes one tab stop when the activity range changes", async () => {
+		const container = setupDom();
+		const seven = makeOverview("7d");
+		const thirty = {
+			...makeOverview("30d"),
+			cutoff: Date.now() - 30 * 24 * 60 * 60 * 1000,
+			heatmapBucketMs: 24 * 60 * 60 * 1000,
+			heatmap: [],
+		};
+		const render = async (overview: ContextOverview) => {
+			await act(async () => {
+				root?.render(
+					<ContextActivityGrid
+						overview={overview}
+						cells={buildActivityCells(overview)}
+						metric="requests"
+						selectedKey={null}
+						onSelect={() => {}}
+					/>,
+				);
+			});
+		};
+		await render(seven);
+		expect(container.querySelectorAll('.context-activity-cell').length).toBeGreaterThan(0);
+		expect([...container.querySelectorAll('.context-activity-cell')].filter(cell => cell.getAttribute('tabindex') === '0')).toHaveLength(1);
+		await render(thirty);
+		expect(container.querySelectorAll('.context-activity-cell').length).toBeGreaterThan(0);
+		expect([...container.querySelectorAll('.context-activity-cell')].filter(cell => cell.getAttribute('tabindex') === '0')).toHaveLength(1);
+	});
+
+	it("switches between session cards and the list without losing the rows", async () => {
+		const container = await renderRoute();
+		expect(container.querySelectorAll(".context-session-card")).toHaveLength(1);
+		const list = [...container.querySelectorAll("button")].find(button => button.textContent === "List");
+		if (!list) throw new Error("List toggle missing");
+		await act(async () => {
+			list.click();
+		});
+		expect(container.querySelectorAll(".context-session-card")).toHaveLength(0);
+		expect(container.textContent).toContain("Context test");
+		const cards = [...container.querySelectorAll("button")].find(button => button.textContent === "Cards");
+		if (!cards) throw new Error("Cards toggle missing");
+		await act(async () => {
+			cards.click();
+		});
+		expect(container.querySelectorAll(".context-session-card")).toHaveLength(1);
+	});
+
+	it("renders the model mix donut legend and an accessible data table", async () => {
+		const container = await renderRoute();
+		expect(container.textContent).toContain("Model mix");
+		expect(container.textContent).toContain("model-a");
+		expect(container.textContent).toContain("Data table");
+		const figure = container.querySelector("figure.context-usage-chart");
+		expect(figure?.getAttribute("aria-label")).toContain("Prompt");
 	});
 
 	it("maps all to a bounded 90d request and labels it", async () => {
