@@ -107,6 +107,7 @@ function fleetRow(file: string, trackId: string, folded: FoldedTranscript): Cont
 	const last = timeline.steps.at(-1);
 	return {
 		trackId,
+		file,
 		label:
 			trackId === "main"
 				? "Main"
