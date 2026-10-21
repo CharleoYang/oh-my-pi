@@ -5,7 +5,7 @@ import {
 	isTranscriptUsageAnchor,
 	type SessionMessageEntry,
 } from "@oh-my-pi/pi-agent-core/compaction";
-import type { AssistantMessage, Model, ProviderResponseMetadata, Usage } from "@oh-my-pi/pi-ai";
+import type { AssistantMessage, ContextSnapshotDetails, Model, ProviderResponseMetadata, Usage } from "@oh-my-pi/pi-ai";
 import { isRecord } from "@oh-my-pi/pi-utils";
 import type { ModelRegistry } from "../config/model-registry";
 import type { Settings } from "../config/settings";
@@ -34,6 +34,8 @@ interface PendingContextSnapshot {
 	promptTokens: number;
 	nonMessageTokens: number;
 	toolSchemaTokens: number;
+	/** Request-time composition details; absent for legacy/rebase snapshots. */
+	details?: ContextSnapshotDetails;
 	cutoffCount: number;
 	/**
 	 * Compaction epoch at rebase time. Distinguishes a genuinely fresh in-turn
@@ -408,9 +410,19 @@ export class SessionStatsTracker {
 	 * Non-message accounting for a provider response: the values captured for
 	 * the in-flight request, or the current values when none is pending.
 	 */
-	nonMessageSnapshot(): Required<NonMessageSnapshot> {
+	nonMessageSnapshot(): {
+		nonMessageTokens: number;
+		toolSchemaTokens: number;
+		details?: ContextSnapshotDetails;
+	} {
 		const pending = this.#pendingContextSnapshot;
-		if (pending) return { nonMessageTokens: pending.nonMessageTokens, toolSchemaTokens: pending.toolSchemaTokens };
+		if (pending) {
+			return {
+				nonMessageTokens: pending.nonMessageTokens,
+				toolSchemaTokens: pending.toolSchemaTokens,
+				...(pending.details ? { details: pending.details } : {}),
+			};
+		}
 		return this.#currentNonMessageSnapshot();
 	}
 

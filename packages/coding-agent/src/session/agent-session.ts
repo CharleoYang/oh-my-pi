@@ -58,6 +58,8 @@ import type {
 	AssistantMessage,
 	CodexCompactionContext,
 	Context,
+	ContextTimeline,
+	ContextTimelineLimits,
 	ImageContent,
 	Judge,
 	Message,
@@ -465,6 +467,7 @@ import {
 import { SessionMemory, type SessionMemoryHost } from "./session-memory";
 import { buildSessionMetadata } from "./session-metadata";
 import { SessionProviderBoundary, type SessionProviderBoundaryHost } from "./session-provider-boundary";
+import { buildLiveContextTimeline, captureContextSnapshotDetails } from "./context-insights";
 import { SessionStatsTracker, type SessionStatsTrackerHost } from "./session-stats";
 import { SessionTools, type SessionToolsHost } from "./session-tools";
 import { resolveOpenAIWebsocketPreference } from "./settings-stream-fn";
@@ -8739,10 +8742,25 @@ export class AgentSession implements SettingsScope {
 				nonMessageTokens +
 					this.agent.tokenizer.countMessages(this.messages) +
 					this.agent.tokenizer.countMessages(messages);
+			const details = breakdown
+				? captureContextSnapshotDetails({
+						breakdown,
+						contextWindow,
+						systemPrompt: this.systemPrompt,
+						tools: this.agent.state.tools,
+						skills: this.renderedSkills,
+						model: this.model,
+						tokenizer: this.agent.tokenizer,
+						sourceRevision: this.settings.revision,
+						messageCount: this.messages.length + messages.length,
+						pendingMessages: messages,
+					})
+				: undefined;
 			this.#stats.setPendingSnapshot({
 				promptTokens,
 				nonMessageTokens,
 				cutoffCount: this.messages.length + messages.length,
+				...(details ? { details } : {}),
 			});
 			// Commit the plan-reference delivery flag only now that the message is
 			// actually handed to agent.prompt. Every pre-send setup step above can
@@ -13396,6 +13414,11 @@ export class AgentSession implements SettingsScope {
 		pendingMessages?: AgentMessage[];
 	}): ContextUsageBreakdown | undefined {
 		return this.#stats.getContextBreakdown(options);
+	}
+
+	/** Shared context timeline for the active branch; no disk IO. */
+	getContextTimeline(options?: { limits?: Partial<ContextTimelineLimits> }): ContextTimeline {
+		return buildLiveContextTimeline(this, options);
 	}
 
 	getContextUsage(options?: { contextWindow?: number }): ContextUsage | undefined {
