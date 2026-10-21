@@ -18,8 +18,18 @@ import {
 	Table,
 	TableSkeleton,
 } from "../ui";
+import { ContextActivityGrid } from "./context/ContextActivityGrid";
 import { ContextDetail } from "./context/ContextDetail";
-import { ContextHeatmap } from "./context/ContextHeatmap";
+import { ContextDonut } from "./context/ContextDonut";
+import { ContextNotice } from "./context/ContextNotice";
+import { ContextSessionCard } from "./context/ContextSessionCard";
+import { ContextUsageChart } from "./context/ContextUsageChart";
+import {
+	buildActivityCells,
+	formatContextCost,
+	modelMixSegments,
+	type ContextActivityCell,
+} from "./context/view-models";
 import "./context/context.css";
 
 export interface ContextRouteProps {
@@ -29,6 +39,9 @@ export interface ContextRouteProps {
 	onOpenSession: (file: string | null) => void;
 }
 type ContextRange = Exclude<TimeRange, "all">;
+type Density = "cards" | "list";
+type SortKey = "recent" | "requests" | "peak" | "cost";
+
 const bounded = (range: TimeRange): ContextRange => (range === "all" ? "90d" : range);
 
 export function ContextRoute({ active, range, session, onOpenSession }: ContextRouteProps) {
@@ -73,14 +86,32 @@ function ContextOverviewPage({
 	});
 	const [metric, setMetric] = useState<"requests" | "promptTokens">("requests");
 	const [filter, setFilter] = useState("");
-	const filtered = useMemo(() => {
-		const needle = filter.trim().toLowerCase();
-		return (query.data?.sessions ?? []).filter(
-			row =>
-				!needle ||
-				`${row.title ?? ""} ${row.file} ${row.folder} ${row.models.join(" ")}`.toLowerCase().includes(needle),
-		);
-	}, [filter, query.data?.sessions]);
+	const [sort, setSort] = useState<SortKey>("recent");
+	const [density, setDensity] = useState<Density>("cards");
+	const [bucketFilter, setBucketFilter] = useState<ContextActivityCell | null>(null);
+	const cells = useMemo(() => (query.data ? buildActivityCells(query.data) : []), [query.data]);
+	const selected = useMemo(
+		() =>
+			(query.data?.sessions ?? [])
+				.filter(row => {
+					if (!bucketFilter) return true;
+					return row.startedAt < bucketFilter.end && row.endedAt >= bucketFilter.start;
+				})
+				.filter(row => {
+					const needle = filter.trim().toLowerCase();
+					return (
+						!needle ||
+						`${row.title ?? ""} ${row.file} ${row.folder} ${row.models.join(" ")}`.toLowerCase().includes(needle)
+					);
+				})
+				.sort((a, b) => {
+					if (sort === "requests") return b.requests - a.requests || b.endedAt - a.endedAt;
+					if (sort === "peak") return b.peakPromptTokens - a.peakPromptTokens || b.endedAt - a.endedAt;
+					if (sort === "cost") return b.costTotal - a.costTotal || b.endedAt - a.endedAt;
+					return b.endedAt - a.endedAt || a.file.localeCompare(b.file);
+				}),
+		[bucketFilter, filter, query.data?.sessions, sort],
+	);
 	const columns = useMemo<Column<ContextSessionRow>[]>(
 		() => [
 			{
@@ -128,6 +159,13 @@ function ContextOverviewPage({
 				sort: row => row.avgPromptTokens,
 			},
 			{
+				key: "cost",
+				header: "Est. cost",
+				align: "right",
+				render: row => <span className="num">{formatContextCost(row.costTotal, row.unpricedRequests)}</span>,
+				sort: row => row.costTotal,
+			},
+			{
 				key: "last",
 				header: "Last active",
 				align: "right",
@@ -158,74 +196,172 @@ function ContextOverviewPage({
 				isEmpty={data => data.kpi.requests === 0}
 				empty={<EmptyState title="No context activity" hint="Choose a bounded range with indexed requests." />}
 			>
-				{overview => (
-					<>
-						<StatGrid min={170}>
-							{[
-								["Sessions", overview.kpi.sessions],
-								["Requests", overview.kpi.requests],
-								["Avg prompt", overview.kpi.avgPromptTokens],
-								["Peak prompt", overview.kpi.peakPromptTokens],
-								["Total tokens", overview.kpi.totalTokens],
-							].map(([label, value]) => (
-								<div
-									data-testid={`context-kpi-${String(label).toLowerCase().replaceAll(" ", "-")}`}
-									key={String(label)}
+				{overview => {
+					const models = modelMixSegments(overview.models);
+					const totalRequests = models.reduce((sum, segment) => sum + segment.value, 0);
+					return (
+						<>
+							<StatGrid min={160}>
+								{[
+									["Sessions", overview.kpi.sessions, false],
+									["Requests", overview.kpi.requests, false],
+									["Prompt tokens", overview.kpi.promptTokens, true],
+									["Cache rate", overview.kpi.cacheRate, false, "percent"],
+									["Est. cost", overview.kpi.costTotal, true, "cost"],
+									["Peak prompt", overview.kpi.peakPromptTokens, false],
+								].map(([label, value, primary, kind]) => (
+									<div
+										className={primary ? "context-kpi-primary" : undefined}
+										data-testid={`context-kpi-${String(label).toLowerCase().replaceAll(" ", "-")}`}
+										key={String(label)}
+									>
+										<Stat
+											label={label}
+											value={
+												kind === "percent"
+													? formatPercent(Number(value))
+													: kind === "cost"
+														? formatContextCost(Number(value), overview.kpi.unpricedRequests)
+														: formatCompact(Number(value))
+											}
+											hint={
+												label === "Sessions"
+													? "detail is authoritative"
+													: label === "Est. cost" && overview.kpi.unpricedRequests > 0
+														? `${overview.kpi.unpricedRequests} unpriced`
+														: undefined
+											}
+										/>
+									</div>
+								))}
+							</StatGrid>
+							<div className="context-overview-split">
+								<Card
+									title="Usage"
+									description={`${rangeLabel} · prompt and output tokens with estimated cost`}
+									stale={query.stale}
 								>
-									<Stat
-										label={label}
-										value={formatCompact(Number(value))}
-										hint={label === "Sessions" ? "composition lives in session detail" : undefined}
+									<ContextUsageChart overview={overview} cells={cells} onSelect={setBucketFilter} />
+								</Card>
+								<Card title="Model mix" description="Requests by model · same range">
+									{models.length > 0 ? (
+										<ContextDonut
+											segments={models}
+											centerLabel="requests"
+											centerValue={formatCompact(totalRequests)}
+											ariaLabel="Model request mix"
+										/>
+									) : (
+										<ContextNotice>No model activity in this range.</ContextNotice>
+									)}
+								</Card>
+							</div>
+							<Card
+								title="Activity"
+								description={`${rangeLabel} · buckets follow the API response`}
+								actions={
+									<Segmented
+										aria-label="Heatmap metric"
+										value={metric}
+										onChange={setMetric}
+										options={[
+											{ value: "requests", label: "Requests" },
+											{ value: "promptTokens", label: "Prompt tokens" },
+										]}
+										size="sm"
 									/>
-								</div>
-							))}
-						</StatGrid>
-						<Card
-							title="Activity heatmap"
-							description={`Buckets follow the API response · ${rangeLabel}`}
-							actions={
-								<Segmented
-									aria-label="Heatmap metric"
-									value={metric}
-									onChange={setMetric}
-									options={[
-										{ value: "requests", label: "Requests" },
-										{ value: "promptTokens", label: "Prompt tokens" },
-									]}
-									size="sm"
+								}
+							>
+								<ContextActivityGrid
+									overview={overview}
+									cells={cells}
+									metric={metric}
+									selectedKey={bucketFilter?.key ?? null}
+									onSelect={cell => setBucketFilter(current => (current?.key === cell.key ? null : cell))}
 								/>
-							}
-						>
-							<ContextHeatmap overview={overview} metric={metric} />
-						</Card>
-						<Card
-							title="Sessions"
-							description={`${formatInteger(filtered.length)} shown · ${formatPercent(overview.kpi.requests ? (overview.kpi.requests - overview.omittedRequests) / overview.kpi.requests : 1, 0)} of requests`}
-							actions={
-								<SearchInput value={filter} onChange={setFilter} placeholder="Filter sessions" width={240} />
-							}
-							flush
-							stale={query.stale}
-						>
-							<Table
-								columns={columns}
-								rows={filtered}
-								rowKey={row => row.file}
-								onRowClick={row => onOpenSession(row.file)}
-								limit={50}
-								initialSort={{ key: "last", dir: "desc" }}
-								empty={<EmptyState title="No matching sessions" hint="Try a different filter." />}
-							/>
-						</Card>
-						{(overview.omittedSessions > 0 || overview.omittedRequests > 0) && (
-							<p className="context-omissions">
-								+{formatInteger(overview.omittedSessions)} sessions / +{formatInteger(overview.omittedRequests)}{" "}
-								requests not shown
+							</Card>
+							<Card
+								title="Sessions"
+								description={`${formatInteger(selected.length)} shown · ${formatPercent(
+									overview.kpi.requests
+										? (overview.kpi.requests - overview.omittedRequests) / overview.kpi.requests
+										: 1,
+									0,
+								)} of requests`}
+								actions={
+									<div className="context-toolbar">
+										<SearchInput
+											value={filter}
+											onChange={setFilter}
+											placeholder="Filter sessions"
+											width={220}
+										/>
+										<Segmented
+											aria-label="Sort sessions"
+											value={sort}
+											onChange={setSort}
+											options={[
+												{ value: "recent", label: "Last" },
+												{ value: "requests", label: "Requests" },
+												{ value: "peak", label: "Peak" },
+												{ value: "cost", label: "Cost" },
+											]}
+											size="sm"
+										/>
+										<Segmented
+											aria-label="Session density"
+											value={density}
+											onChange={setDensity}
+											options={[
+												{ value: "cards", label: "Cards" },
+												{ value: "list", label: "List" },
+											]}
+											size="sm"
+										/>
+									</div>
+								}
+								flush={density === "list"}
+								stale={query.stale}
+							>
+								{bucketFilter && (
+									<div className="context-filter-chip">
+										<span>Filtered: {bucketFilter.label}</span>
+										<button type="button" onClick={() => setBucketFilter(null)}>
+											Clear
+										</button>
+									</div>
+								)}
+								{density === "cards" ? (
+									<div className="context-session-grid">
+										{selected.map(row => (
+											<ContextSessionCard key={row.file} row={row} onOpen={onOpenSession} />
+										))}
+										{selected.length === 0 && <ContextNotice>No sessions match this filter.</ContextNotice>}
+									</div>
+								) : (
+									<Table
+										columns={columns}
+										rows={selected}
+										rowKey={row => row.file}
+										onRowClick={row => onOpenSession(row.file)}
+										limit={50}
+										initialSort={{ key: "last", dir: "desc" }}
+										empty={<EmptyState title="No matching sessions" hint="Try a different filter." />}
+									/>
+								)}
+							</Card>
+							{(overview.omittedSessions > 0 || overview.omittedRequests > 0) && (
+								<p className="context-omissions">
+									+{formatInteger(overview.omittedSessions)} sessions / +
+									{formatInteger(overview.omittedRequests)} requests not shown
+								</p>
+							)}
+							<p className="micro">
+								Composition lives in session detail; overview values are a DB approximation.
 							</p>
-						)}
-						<p className="micro">Composition lives in session detail; overview values are a DB approximation.</p>
-					</>
-				)}
+						</>
+					);
+				}}
 			</QueryView>
 		</div>
 	);
