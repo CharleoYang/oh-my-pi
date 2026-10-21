@@ -47,25 +47,62 @@ function setupDom(): HTMLElement {
 }
 
 function makeOverview(range: ContextOverview["range"] = "24h"): ContextOverview {
+	const now = Date.now();
+	const cutoff = now - 24 * 60 * 60 * 1000;
+	const bucket = Math.floor((now - 60 * 60 * 1000) / 3_600_000) * 3_600_000;
 	return {
 		range,
-		cutoff: 1_700_000_000_000,
+		cutoff,
 		heatmapBucketMs: 3_600_000,
-		kpi: { sessions: 2, requests: 3, avgPromptTokens: 120, peakPromptTokens: 240, totalTokens: 600 },
-		heatmap: [{ bucket: 1_700_000_000_000, requests: 2, promptTokens: 240 }],
+		kpi: {
+			sessions: 2,
+			requests: 3,
+			avgPromptTokens: 120,
+			peakPromptTokens: 240,
+			totalTokens: 600,
+			promptTokens: 360,
+			inputTokens: 240,
+			outputTokens: 60,
+			cacheReadTokens: 100,
+			cacheWriteTokens: 20,
+			cacheRate: 100 / 340,
+			costTotal: 0.12,
+			unpricedRequests: 1,
+		},
+		heatmap: [
+			{
+				bucket,
+				requests: 2,
+				promptTokens: 240,
+				outputTokens: 40,
+				totalTokens: 400,
+				costTotal: 0.1,
+				unpricedRequests: 0,
+			},
+		],
+		models: [
+			{ model: "model-a", requests: 3, promptTokens: 360, totalTokens: 600, costTotal: 0.12, unpricedRequests: 1 },
+		],
 		sessions: [
 			{
 				file: `/tmp/context-${++sequence}.jsonl`,
 				folder: "/tmp",
 				title: "Context test",
 				models: ["model-a"],
-				startedAt: 1_700_000_000_000,
-				endedAt: 1_700_000_010_000,
+				startedAt: now - 2 * 60 * 60 * 1000,
+				endedAt: now - 30 * 60 * 1000,
 				requests: 2,
 				totalTokens: 300,
 				promptTokens: 200,
 				peakPromptTokens: 180,
 				avgPromptTokens: 100,
+				inputTokens: 120,
+				outputTokens: 30,
+				cacheReadTokens: 50,
+				cacheWriteTokens: 10,
+				costTotal: 0.12,
+				unpricedRequests: 1,
+				sparkline: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 100, 50],
 			},
 		],
 		omittedSessions: 1,
@@ -219,12 +256,42 @@ afterEach(async () => {
 });
 
 describe("Context page", () => {
-	it("renders KPI values, densified heatmap and omission text", async () => {
+	it("renders KPI values, activity cells, session cards and omission text", async () => {
 		const container = await renderRoute();
-		expect(container.textContent).toContain("Sessions");
-		expect(container.textContent).toContain("2");
+		for (const label of ["Sessions", "Requests", "Prompt tokens", "Cache rate", "Est. cost", "Peak prompt"])
+			expect(container.textContent).toContain(label);
 		expect(container.textContent).toContain("+1 sessions");
-		expect(container.querySelectorAll(".context-heatmap-cell").length).toBeGreaterThan(1);
+		expect(container.querySelectorAll(".context-activity-cell").length).toBeGreaterThan(1);
+		expect(container.querySelectorAll(".context-session-card")).toHaveLength(1);
+		expect(container.textContent).toContain("~$0.12");
+	});
+
+
+	it("switches between session cards and the list without losing the rows", async () => {
+		const container = await renderRoute();
+		expect(container.querySelectorAll(".context-session-card")).toHaveLength(1);
+		const list = [...container.querySelectorAll("button")].find(button => button.textContent === "List");
+		if (!list) throw new Error("List toggle missing");
+		await act(async () => {
+			list.click();
+		});
+		expect(container.querySelectorAll(".context-session-card")).toHaveLength(0);
+		expect(container.textContent).toContain("Context test");
+		const cards = [...container.querySelectorAll("button")].find(button => button.textContent === "Cards");
+		if (!cards) throw new Error("Cards toggle missing");
+		await act(async () => {
+			cards.click();
+		});
+		expect(container.querySelectorAll(".context-session-card")).toHaveLength(1);
+	});
+
+	it("renders the model mix donut legend and an accessible data table", async () => {
+		const container = await renderRoute();
+		expect(container.textContent).toContain("Model mix");
+		expect(container.textContent).toContain("model-a");
+		expect(container.textContent).toContain("Data table");
+		const figure = container.querySelector("figure.context-usage-chart");
+		expect(figure?.getAttribute("aria-label")).toContain("Prompt");
 	});
 
 	it("maps all to a bounded 90d request and labels it", async () => {
