@@ -121,9 +121,10 @@ describe("session context", () => {
 		let parent: string | null = null;
 		for (let index = 0; index < 1001; index++) {
 			const id = `s${index}`;
+			const input = index === 0 ? 9000 : 1;
 			entries.push({
-				...assistant(id, parent, 1),
-				message: { ...assistant(id, parent, 1).message, usage: { input: 1, output: 1, cost: { total: 1 } } },
+				...assistant(id, parent, input),
+				message: { ...assistant(id, parent, input).message, usage: { input, output: 1, cost: { total: 1 } } },
 			});
 			parent = id;
 		}
@@ -131,7 +132,8 @@ describe("session context", () => {
 		const timeline = await buildSessionContextTimeline(file);
 		expect(timeline.steps).toHaveLength(1000);
 		expect(timeline.omittedSteps).toBe(1);
-		expect(timeline.agents[0]).toMatchObject({ trackId: "main", requests: 1001, costTotal: 1001 });
+		expect(timeline.steps.at(-1)?.promptTokens).toBe(1);
+		expect(timeline.agents[0]).toMatchObject({ trackId: "main", requests: 1001, costTotal: 1001, peakTokens: 9000 });
 	});
 
 	it("serves the active branch, not a stale sibling, with a reusable ETag", async () => {

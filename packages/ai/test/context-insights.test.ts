@@ -301,6 +301,8 @@ describe("foldContextTimeline", () => {
 		expect(timeline.steps.map(step => step.id)).toEqual(["a3"]);
 		expect(timeline.omittedSteps).toBe(2);
 		expect(timeline.costTotal).toBe(0.75);
+		expect(timeline.peakTokensTotal).toBe(30);
+		expect(timeline.peakTokens).toBe(30);
 	});
 
 	test("zero step and event limits return empty windows", () => {

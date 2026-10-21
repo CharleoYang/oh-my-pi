@@ -141,6 +141,8 @@ export interface ContextTimeline {
 	peakTokens: number;
 	/** Usage cost across every eligible step, including steps beyond `maxSteps`. */
 	costTotal: number;
+	/** Max promptTokens across every eligible step, including steps beyond `maxSteps`. */
+	peakTokensTotal: number;
 	events: ContextEvent[];
 	omittedEvents: number;
 	files: ContextFileActivity[];

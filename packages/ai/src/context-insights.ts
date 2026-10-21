@@ -633,6 +633,7 @@ export function foldContextTimeline(input: ContextTimelineInput): ContextTimelin
 	const lastStep = returnedSteps.at(-1);
 	const peakTokens = returnedSteps.reduce((peak, step) => Math.max(peak, step.promptTokens), 0);
 	const costTotal = steps.reduce((sum, pending) => sum + (pending.step.usage?.costTotal ?? 0), 0);
+	const peakTokensTotal = steps.reduce((peak, pending) => Math.max(peak, pending.step.promptTokens), 0);
 	const legacySteps = returnedSteps.filter(step => step.composition === undefined).length;
 	const incompleteFileCalls = [...pendingCalls.values()].filter(call => call.path && !call.resolved).length;
 	const sourceDetailsTruncated = returned.some(
@@ -655,6 +656,7 @@ export function foldContextTimeline(input: ContextTimelineInput): ContextTimelin
 		...(lastStep?.contextWindow !== undefined ? { contextWindow: lastStep.contextWindow } : {}),
 		peakTokens,
 		costTotal,
+		peakTokensTotal,
 		events: keptEvents,
 		omittedEvents,
 		files: keptFiles,

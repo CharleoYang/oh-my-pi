@@ -16,7 +16,7 @@
 
 ## Systemic fix in this revision
 
-1. `foldContextTimeline` now accumulates `costTotal` over **all eligible steps before `maxSteps` truncation** and returns it on `ContextTimeline`. This is one accounting pass, shared by TUI, journal, and fleet.
+1. `foldContextTimeline` now accumulates `costTotal` and `peakTokensTotal` over **all eligible steps before `maxSteps` truncation** and returns them on `ContextTimeline`. This is one accounting pass, shared by TUI, journal, and fleet. The post-retrospective gate caught the same truncation class in `peakTokens`; the fix is the same aggregate-before-slice invariant.
 2. The adapter deletes `branchCost` entirely and reads `timeline.costTotal`; there is no second eligibility predicate to drift.
 3. Regression tests cover the 1,001-step cap, `contextTokens=0`, fractional values, mixed negative input/cache fields, duplicate IDs, snapshots, and a differential comparison against the fold oracle.
 4. Freshness keys preserve the filename suffix per directory (`Scout.jsonl` vs `Scout.jsonl.gz`) while keeping the stem-based `trackId` unchanged.

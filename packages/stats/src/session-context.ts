@@ -117,7 +117,7 @@ function fleetRow(file: string, trackId: string, folded: FoldedTranscript): Cont
 		model: last?.model ?? model,
 		status,
 		requests: timeline.steps.length + timeline.omittedSteps,
-		peakTokens: timeline.peakTokens,
+		peakTokens: timeline.peakTokensTotal,
 		lastTokens: last?.promptTokens,
 		costTotal: timeline.costTotal,
 	};
