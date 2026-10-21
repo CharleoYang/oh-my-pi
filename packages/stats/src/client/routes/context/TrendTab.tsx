@@ -21,10 +21,6 @@ export function TrendTab({
 	const steps = timeline.steps.slice(-200);
 	const offset = timeline.steps.length - steps.length;
 	const series = useMemo<ChartSeries[]>(() => {
-		if (delta === "delta")
-			return [
-				{ key: "delta", label: "Δ prompt", color: COLORS[2]!, values: steps.map(step => step.deltaTokens ?? null) },
-			];
 		const composition = KEYS.map((key, index) => ({
 			key,
 			label:
@@ -49,7 +45,7 @@ export function TrendTab({
 				tooltip: false,
 			},
 		];
-	}, [delta, steps]);
+	}, [steps]);
 	return (
 		<section className="card context-trend">
 			<header className="card-header">
@@ -82,20 +78,86 @@ export function TrendTab({
 						/>
 					))}
 				</div>
-				<Chart
-					slots={steps.length}
-					tickLabel={index => `#${steps[index]?.index ?? ""}`}
-					series={series}
-					onSelect={index => onSelect(offset + index)}
-					format={formatCompact}
-					tooltipExtra={index => (
-						<span>
-							{formatTimestamp(steps[index]!.timestamp)} · step #{steps[index]!.index}
-						</span>
-					)}
-					emptyLabel="Composition unavailable"
-				/>
+				{delta === "delta" ? (
+					<DeltaList steps={steps} offset={offset} selected={selected} timeline={timeline} onSelect={onSelect} />
+				) : (
+					<Chart
+						slots={steps.length}
+						tickLabel={index => `#${steps[index]?.index ?? ""}`}
+						series={series}
+						onSelect={index => onSelect(offset + index)}
+						format={formatCompact}
+						tooltipExtra={index => (
+							<span>
+								{formatTimestamp(steps[index]!.timestamp)} · step #{steps[index]!.index}
+							</span>
+						)}
+						emptyLabel="Composition unavailable"
+					/>
+				)}
 			</div>
 		</section>
+	);
+}
+
+function DeltaList({
+	steps,
+	offset,
+	selected,
+	timeline,
+	onSelect,
+}: {
+	steps: ContextTimeline["steps"];
+	offset: number;
+	selected: number;
+	timeline: ContextTimeline;
+	onSelect: (index: number) => void;
+}) {
+	const max = Math.max(1, ...steps.map(step => Math.abs(step.deltaTokens ?? 0)));
+	return (
+		<div className="context-delta-list" role="list" aria-label="Prompt delta by step">
+			{steps.map((step, index) => {
+				const value = step.deltaTokens;
+				if (value === undefined) {
+					return (
+						<button
+							type="button"
+							role="listitem"
+							className="context-delta-row"
+							key={step.id}
+							onClick={() => onSelect(offset + index)}
+						>
+							<span>#{step.index}</span>
+							<span className="num">n/a</span>
+						</button>
+					);
+				}
+				const pct = (Math.abs(value) / max) * 50;
+				return (
+					<button
+						type="button"
+						role="listitem"
+						className={
+							timeline.steps[selected]?.id === step.id ? "context-delta-row active" : "context-delta-row"
+						}
+						key={step.id}
+						title={`${formatTimestamp(step.timestamp)} · ${step.deltaKind}`}
+						onClick={() => onSelect(offset + index)}
+					>
+						<span>#{step.index}</span>
+						<span className="num">
+							{value > 0 ? "+" : ""}
+							{formatCompact(value)}
+						</span>
+						<span className="context-delta-track" aria-hidden="true">
+							<span
+								className={value < 0 ? "context-delta-fill negative" : "context-delta-fill"}
+								style={value < 0 ? { right: "50%", width: `${pct}%` } : { left: "50%", width: `${pct}%` }}
+							/>
+						</span>
+					</button>
+				);
+			})}
+		</div>
 	);
 }

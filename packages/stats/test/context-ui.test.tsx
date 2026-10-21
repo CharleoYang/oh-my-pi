@@ -276,13 +276,33 @@ describe("Context page", () => {
 
 	it("rejects unsupported timeline schemas before rendering fields", async () => {
 		const file = `/tmp/schema-${++sequence}.jsonl`;
-		const container = await renderRoute(file, "24h", [], {
-			...(timeline as unknown as Record<string, unknown>),
-			file,
-			schemaVersion: 2,
-		} as never);
+		const container = await renderRoute(file, "24h", [], { file, schemaVersion: 2 } as never);
 		expect(container.textContent).toContain("Unsupported context timeline schemaVersion 2");
 		expect(container.textContent).not.toContain("Prompt composition");
+	});
+
+	it("renders negative prompt deltas on a signed zero baseline", async () => {
+		const file = `/tmp/delta-${++sequence}.jsonl`;
+		const container = await renderRoute(file, "24h", [], {
+			...timeline,
+			file,
+			steps: [{ ...timeline.steps[1]!, deltaTokens: -100 }],
+		});
+		const trend = [...container.querySelectorAll("button")].find(button => button.textContent === "Trend");
+		if (!trend) throw new Error("Trend tab missing");
+		await act(async () => {
+			trend.click();
+		});
+		const deltaButton = [...container.querySelectorAll("button")].find(button => button.textContent === "Δ");
+		if (!deltaButton) throw new Error("delta toggle missing");
+		await act(async () => {
+			deltaButton.click();
+		});
+		expect(container.textContent).toContain("-100");
+		const negative = container.querySelector(".context-delta-fill.negative") as HTMLElement | null;
+		expect(negative).toBeTruthy();
+		expect(negative?.style.right).toBe("50%");
+		expect(negative?.style.width).toBe("50%");
 	});
 
 	it("renders system-part details in the Browser tab", async () => {
