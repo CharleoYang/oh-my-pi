@@ -7,6 +7,7 @@ import {
 	CONTEXT_FIXTURE_SESSION_ID,
 	contextSessionFixture,
 } from "../../ai/test/fixtures/context-session";
+import { expectContextTimelineParity } from "../../ai/test/context-insights-assertions";
 import { getSessionContext } from "../src/client/api";
 import { cachedEntry, loadQuery } from "../src/client/data/query-store";
 import { buildSessionContextResponse, buildSessionContextTimeline } from "../src/context";
@@ -183,7 +184,7 @@ describe("journal context integration", () => {
 			agents: [],
 			normalizePath: value => path.resolve(CONTEXT_FIXTURE_CWD, value.replace(/:[\d-]+:raw$/, "")),
 		});
-		expect({ ...actual, agents: [] }).toEqual(expected);
+		expectContextTimelineParity(actual, expected, { ignoreAgents: true });
 		expect(actual.steps.map(step => step.id)).toEqual(["a1", "a2", "a3", "a4", "a5", "a6"]);
 		expect(actual.steps.map(step => step.promptTokens)).toEqual([120, 100, 80, 60, 40, 20]);
 		expect(actual.events.map(event => event.kind)).toEqual([

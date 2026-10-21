@@ -32,6 +32,7 @@ import {
 	setAgentDir,
 	TempDir,
 } from "@oh-my-pi/pi-utils";
+import { expectContextTimelineParity } from "../../ai/test/context-insights-assertions";
 import { contextSessionFixture } from "../../ai/test/fixtures/context-session";
 import { VirtualTerminal } from "../../tui/test/virtual-terminal";
 
@@ -271,8 +272,7 @@ describe("context insights source-only cross-surface E2E", () => {
 			const etag = response.headers.get("ETag");
 			expect(etag).toBeTruthy();
 			const journal = (await response.json()) as ContextTimeline;
-			for (const key of ["steps", "events", "files", "peakTokens", "legacySteps", "incompleteFileCalls"] as const)
-				expect(journal[key]).toEqual(live[key]);
+			expectContextTimelineParity(journal, live, { ignoreAgents: true, ignoreSource: true, ignoreFile: true });
 			const unchanged = await fetch(url, { headers: { "If-None-Match": etag! } });
 			expect(unchanged.status).toBe(304);
 			expect(await unchanged.text()).toBe("");
@@ -319,6 +319,17 @@ describe("context insights source-only cross-surface E2E", () => {
 			expect(await page.$eval('[data-testid="context-detail-peak"]', element => element.textContent)).toBe(
 				String(live.peakTokens),
 			);
+			await page.click('[data-testid="context-tab-trend"]');
+			await page.waitForSelector('[data-testid="context-tab-trend"][aria-selected="true"]');
+			const trendOptions = await page.$$(".context-trend .segmented-option");
+			const deltaToggle = trendOptions[1];
+			if (!deltaToggle) throw new Error("Web Trend delta toggle missing");
+			await deltaToggle.click();
+			await page.waitForFunction('document.querySelector("body")?.textContent?.includes("+120")');
+			const trendText = await page.$eval("body", element => element.textContent ?? "");
+			expect(trendText).toContain("#6");
+			expect(trendText).toContain("+120");
+
 			for (const tab of ["composition", "trend", "browser", "events", "files", "fleet"]) {
 				const selector = `[data-testid="context-tab-${tab}"]`;
 				expect(await page.$eval(selector, element => element.textContent)).toBe(
