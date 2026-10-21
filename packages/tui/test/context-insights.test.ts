@@ -32,6 +32,8 @@ function timeline(): ContextTimeline {
 		detailsOmittedSteps: 2,
 		composition,
 		peakTokens: 1200,
+		costTotal: 0,
+		peakTokensTotal: 1200,
 		omittedEvents: 2,
 		omittedFiles: 4,
 		incompleteFileCalls: 1,
