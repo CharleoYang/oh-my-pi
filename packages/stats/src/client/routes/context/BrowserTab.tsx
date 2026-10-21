@@ -123,6 +123,7 @@ export function BrowserTab({
 										name={item.name}
 										tokens={item.tokens}
 										total={details.categories.systemTools}
+										color={CATEGORY_STYLE.systemTools.color}
 									/>
 								))}
 							</BrowserSection>
@@ -135,6 +136,7 @@ export function BrowserTab({
 										name={item.name}
 										tokens={item.tokens}
 										total={details.categories.skills}
+										color={CATEGORY_STYLE.skills.color}
 									/>
 								))}
 							</BrowserSection>
@@ -151,6 +153,7 @@ export function BrowserTab({
 										name={`part ${index}`}
 										tokens={tokens}
 										total={details.categories.systemPrompt}
+										color={CATEGORY_STYLE.systemPrompt.color}
 									/>
 								))}
 							</BrowserSection>
@@ -161,6 +164,7 @@ export function BrowserTab({
 									name="messages"
 									tokens={details.categories.messages}
 									total={details.categories.messages}
+									color={CATEGORY_STYLE.messages.color}
 								/>
 								<div className="context-browser-note">
 									pending tokens: {formatCompact(details.pendingMessageTokens)} · context window:{" "}
@@ -174,6 +178,7 @@ export function BrowserTab({
 									name="system context"
 									tokens={details.categories.systemContext}
 									total={details.categories.systemContext}
+									color={CATEGORY_STYLE.systemContext.color}
 								/>
 							</BrowserSection>
 						)}
@@ -210,7 +215,7 @@ function BrowserSection({
 	);
 }
 
-function BrowserItem({ name, tokens, total }: { name: string; tokens: number; total: number }) {
+function BrowserItem({ name, tokens, total, color }: { name: string; tokens: number; total: number; color: string }) {
 	const share = total > 0 ? tokens / total : 0;
 	return (
 		<div className="context-browser-item">
@@ -218,7 +223,7 @@ function BrowserItem({ name, tokens, total }: { name: string; tokens: number; to
 				{name}
 			</span>
 			<span className="context-category-track" aria-hidden="true">
-				<i style={{ width: `${Math.min(100, share * 100)}%`, background: "var(--ctx-system-tools)" }} />
+				<i style={{ width: `${Math.min(100, share * 100)}%`, background: color }} />
 			</span>
 			<b>{formatCompact(tokens)}</b>
 			<small>{formatPercent(share, 0)}</small>
