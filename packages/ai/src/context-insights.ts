@@ -249,6 +249,7 @@ interface PendingToolCall {
 	name: string;
 	path?: string;
 	resolved: boolean;
+	owner?: PendingStep;
 	/** Call-side write contribution, used to migrate counts to resolvedPath without double counting. */
 	writeLines?: number;
 	writeBytes?: number;
@@ -584,10 +585,22 @@ export function foldContextTimeline(input: ContextTimelineInput): ContextTimelin
 					const toolName = typeof block.name === "string" ? block.name : undefined;
 					if (!toolId || !toolName) continue;
 					const args = isRecord(block.arguments) ? block.arguments : {};
+					const isFileTool =
+						toolName === "read" || toolName === "write" || toolName === "edit" || toolName === "ast_edit";
+					const isSearchTool = SEARCH_TOOLS.has(toolName);
+					if (!isFileTool && !isSearchTool) continue;
+					const rawPath = args.path ?? args.file_path;
+					const hasRawPath = typeof rawPath === "string" && rawPath.length > 0;
 					const path = resolveToolPath(args, input.normalizePath);
-					const call: PendingToolCall = { id: toolId, name: toolName, ...(path ? { path } : {}), resolved: false };
+					if (!path && !(isSearchTool && !hasRawPath)) continue;
+					const call: PendingToolCall = {
+						id: toolId,
+						name: toolName,
+						...(path ? { path } : {}),
+						resolved: false,
+						owner: pending,
+					};
 					pendingCalls.set(toolId, call);
-					if (!path && !SEARCH_TOOLS.has(toolName)) continue;
 					const activityPath = path ?? "(search)";
 					const file = activity(activityPath, stepTimestamp);
 					if (toolName === "read") file.reads++;
@@ -600,7 +613,7 @@ export function foldContextTimeline(input: ContextTimelineInput): ContextTimelin
 						file.linesAdded += lines;
 						file.bytesWritten += bytes;
 					} else if (toolName === "edit" || toolName === "ast_edit") file.edits++;
-					else if (SEARCH_TOOLS.has(toolName)) file.searches++;
+					else if (isSearchTool) file.searches++;
 					pending.filePaths.add(activityPath);
 				}
 				steps.push(pending);
@@ -645,6 +658,7 @@ export function foldContextTimeline(input: ContextTimelineInput): ContextTimelin
 							? resolveToolPath({ path: rawResolved }, input.normalizePath)
 							: undefined;
 					if (resolved && resolved !== call.path) {
+						const previousPath = call.path;
 						const resultTimestamp = timestampOf(message.timestamp ?? entry.timestamp);
 						file.writes = Math.max(0, file.writes - 1);
 						file.linesAdded = Math.max(0, file.linesAdded - (call.writeLines ?? 0));
@@ -660,13 +674,20 @@ export function foldContextTimeline(input: ContextTimelineInput): ContextTimelin
 							file.bytesRead === 0 &&
 							file.bytesWritten === 0
 						) {
-							files.delete(call.path);
+							files.delete(previousPath);
 						}
 						const target = activity(resolved, resultTimestamp);
 						target.writes++;
 						target.linesAdded += call.writeLines ?? 0;
 						target.bytesWritten += call.writeBytes ?? 0;
 						call.path = resolved;
+						if (call.owner) {
+							const otherUsesPrevious = [...pendingCalls.values()].some(
+								other => other !== call && other.path === previousPath,
+							);
+							if (!otherUsesPrevious) call.owner.filePaths.delete(previousPath);
+							call.owner.filePaths.add(resolved);
+						}
 					}
 				} else if (call.name === "edit" || call.name === "ast_edit") {
 					const perFile = asArray(resultDetails?.perFileResults);
@@ -717,7 +738,7 @@ export function foldContextTimeline(input: ContextTimelineInput): ContextTimelin
 	}
 
 	const omittedSteps = Math.max(0, steps.length - maxSteps);
-	const returned = steps.slice(-maxSteps);
+	const returned = maxSteps === 0 ? [] : steps.slice(-maxSteps);
 	let detailsOmittedSteps = 0;
 	let usedBrowserEntries = 0;
 	for (let index = returned.length - 1; index >= 0; index--) {
@@ -739,7 +760,7 @@ export function foldContextTimeline(input: ContextTimelineInput): ContextTimelin
 	}
 
 	const omittedEvents = Math.max(0, events.length - maxEvents);
-	const keptEvents = events.slice(-maxEvents).map(item => item.event);
+	const keptEvents = (maxEvents === 0 ? [] : events.slice(-maxEvents)).map(item => item.event);
 	for (const event of keptEvents) {
 		if (event.stepIndex === undefined) continue;
 		const step = returned.find(item => item.step.index === event.stepIndex);

@@ -290,4 +290,82 @@ describe("foldContextTimeline", () => {
 		expect(timeline.events[0]?.stepIndex).toBeUndefined();
 		expect(timeline.steps[0]?.eventIds).toEqual([]);
 	});
+
+	test("zero step and event limits return empty windows", () => {
+		const timeline = foldContextTimeline(
+			input({
+				entries: [
+					assistant("a1", 1, 10, [], { details: undefined }),
+					{ type: "reset_boundary", id: "reset-1", timestamp: at(2) },
+				],
+				limits: { maxSteps: 0, maxEvents: 0 },
+			}),
+		);
+		expect(timeline.steps).toEqual([]);
+		expect(timeline.events).toEqual([]);
+		expect(timeline.omittedSteps).toBe(1);
+		expect(timeline.omittedEvents).toBe(1);
+		expect(timeline.peakTokens).toBe(0);
+		expect(timeline.composition).toBeUndefined();
+		expect(timeline.truncated).toBe(true);
+	});
+
+	test("ignores non-file tools even when they carry a path", () => {
+		const seen: string[] = [];
+		const timeline = foldContextTimeline(
+			input({
+				entries: [
+					assistant("a1", 1, 10, [{ type: "toolCall", id: "bash-1", name: "bash", arguments: { path: "a.ts" } }], {
+						details: undefined,
+					}),
+				],
+				normalizePath: p => {
+					seen.push(p);
+					return p;
+				},
+			}),
+		);
+		expect(timeline.files).toEqual([]);
+		expect(timeline.steps[0]?.filePaths).toEqual([]);
+		expect(timeline.incompleteFileCalls).toBe(0);
+		expect(seen).toEqual([]);
+	});
+
+	test("does not turn excluded search targets into the search bucket", () => {
+		const timeline = foldContextTimeline(
+			input({
+				entries: [
+					assistant(
+						"a1",
+						1,
+						10,
+						[{ type: "toolCall", id: "grep-1", name: "grep", arguments: { path: "artifact://x" } }],
+						{ details: undefined },
+					),
+				],
+			}),
+		);
+		expect(timeline.files).toEqual([]);
+		expect(timeline.steps[0]?.filePaths).toEqual([]);
+	});
+
+	test("migrates a resolved write path in the owning step", () => {
+		const timeline = foldContextTimeline(
+			input({
+				entries: [
+					assistant(
+						"a1",
+						1,
+						10,
+						[{ type: "toolCall", id: "write-1", name: "write", arguments: { path: "a.ts", content: "x" } }],
+						{ details: undefined },
+					),
+					toolResult("r1", 2, "write-1", "write", { resolvedPath: "b.ts" }),
+				],
+			}),
+		);
+		expect(timeline.files.map(file => file.path)).toEqual(["/work/b.ts"]);
+		expect(timeline.files[0]).toMatchObject({ writes: 1, linesAdded: 1, bytesWritten: 1 });
+		expect(timeline.steps[0]?.filePaths).toEqual(["/work/b.ts"]);
+	});
 });
