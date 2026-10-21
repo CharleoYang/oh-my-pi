@@ -368,4 +368,31 @@ describe("foldContextTimeline", () => {
 		expect(timeline.files[0]).toMatchObject({ writes: 1, linesAdded: 1, bytesWritten: 1 });
 		expect(timeline.steps[0]?.filePaths).toEqual(["/work/b.ts"]);
 	});
+
+	test("does not retain a previous path because an earlier step used it", () => {
+		const timeline = foldContextTimeline(
+			input({
+				entries: [
+					assistant(
+						"reader",
+						1,
+						10,
+						[{ type: "toolCall", id: "read-1", name: "read", arguments: { path: "a.ts" } }],
+						{ details: undefined },
+					),
+					toolResult("read-result", 2, "read-1", "read", { totalLines: 1 }),
+					assistant(
+						"writer",
+						3,
+						10,
+						[{ type: "toolCall", id: "write-1", name: "write", arguments: { path: "a.ts", content: "x" } }],
+						{ details: undefined },
+					),
+					toolResult("write-result", 4, "write-1", "write", { resolvedPath: "b.ts" }),
+				],
+			}),
+		);
+		expect(timeline.steps[0]?.filePaths).toEqual(["/work/a.ts"]);
+		expect(timeline.steps[1]?.filePaths).toEqual(["/work/b.ts"]);
+	});
 });

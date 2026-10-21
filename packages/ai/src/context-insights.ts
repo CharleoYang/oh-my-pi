@@ -683,7 +683,7 @@ export function foldContextTimeline(input: ContextTimelineInput): ContextTimelin
 						call.path = resolved;
 						if (call.owner) {
 							const otherUsesPrevious = [...pendingCalls.values()].some(
-								other => other !== call && other.path === previousPath,
+								other => other !== call && other.owner === call.owner && other.path === previousPath,
 							);
 							if (!otherUsesPrevious) call.owner.filePaths.delete(previousPath);
 							call.owner.filePaths.add(resolved);
