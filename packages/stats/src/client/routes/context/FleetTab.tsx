@@ -1,7 +1,10 @@
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { formatCompact, formatCost } from "../../data/formatters";
-import { Card, type Column, Table } from "../../ui";
+import { Card, type Column, Segmented, Table } from "../../ui";
 import type { ContextAgentUsage, ContextTimeline } from "../../types";
+import { ContextFleetGraph } from "./ContextFleetGraph";
+
+type FleetView = "graph" | "table";
 
 export function FleetTab({
 	timeline,
@@ -10,6 +13,7 @@ export function FleetTab({
 	timeline: ContextTimeline;
 	onOpenAgent: (agent: ContextAgentUsage) => void;
 }) {
+	const [view, setView] = useState<FleetView>("graph");
 	const columns = useMemo<Column<ContextAgentUsage>[]>(
 		() => [
 			{
@@ -71,16 +75,36 @@ export function FleetTab({
 		],
 		[],
 	);
+	const graph = view === "graph";
 	return (
-		<Card title="Fleet" description="Child transcripts folded into this session">
-			<Table
-				columns={columns}
-				rows={timeline.agents}
-				rowKey={agent => agent.trackId}
-				onRowClick={agent => agent.status === "subagent" && onOpenAgent(agent)}
-				initialSort={{ key: "requests", dir: "desc" }}
-				empty={<p className="dim">No child transcripts recorded.</p>}
-			/>
+		<Card
+			title="Fleet"
+			description="Flat fan: one session, every child transcript."
+			actions={
+				<Segmented
+					aria-label="Fleet view"
+					size="sm"
+					value={view}
+					onChange={setView}
+					options={[
+						{ value: "graph", label: "Graph" },
+						{ value: "table", label: "Table" },
+					]}
+				/>
+			}
+		>
+			{graph ? (
+				<ContextFleetGraph timeline={timeline} onOpenAgent={onOpenAgent} />
+			) : (
+				<Table
+					columns={columns}
+					rows={timeline.agents}
+					rowKey={agent => agent.trackId}
+					onRowClick={agent => agent.status === "subagent" && onOpenAgent(agent)}
+					initialSort={{ key: "requests", dir: "desc" }}
+					empty={<p className="dim">No child transcripts recorded.</p>}
+				/>
+			)}
 		</Card>
 	);
 }
