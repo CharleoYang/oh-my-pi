@@ -62,10 +62,11 @@ export function ContextFleetGraph({
 				});
 			}
 			setConnectors(next);
+			const clipLeft = Math.min(laneRect.left, mainRect.right) - canvasRect.left;
 			setLaneClip({
-				x: laneRect.left - canvasRect.left,
+				x: clipLeft,
 				y: laneRect.top - canvasRect.top,
-				width: laneRect.width,
+				width: laneRect.right - canvasRect.left - clipLeft,
 				height: laneRect.height,
 			});
 		};
