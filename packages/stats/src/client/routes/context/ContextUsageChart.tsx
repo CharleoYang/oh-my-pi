@@ -84,6 +84,7 @@ export function ContextUsageChart({
 							<th>Requests</th>
 							<th>Prompt</th>
 							<th>Output</th>
+							<th>Total</th>
 							<th>Cost</th>
 						</tr>
 					</thead>
@@ -98,6 +99,7 @@ export function ContextUsageChart({
 								<td>{formatCompact(point.requests)}</td>
 								<td>{formatCompact(point.promptTokens)}</td>
 								<td>{formatCompact(point.outputTokens)}</td>
+								<td>{formatCompact(point.totalTokens)}</td>
 								<td>
 									{point.costTotal === 0 && point.unpricedRequests > 0
 										? "N/A"

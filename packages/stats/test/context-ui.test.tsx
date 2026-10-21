@@ -4,6 +4,8 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { getSessionContext } from "../src/client/api";
 import { ContextRoute } from "../src/client/routes/ContextRoute";
+import { ContextActivityGrid } from "../src/client/routes/context/ContextActivityGrid";
+import { buildActivityCells } from "../src/client/routes/context/view-models";
 import type { ContextOverview, ContextTimeline } from "../src/client/types";
 
 type FetchInput = string | URL | Request;
@@ -72,12 +74,12 @@ function makeOverview(range: ContextOverview["range"] = "24h"): ContextOverview 
 		heatmap: [
 			{
 				bucket,
-				requests: 2,
-				promptTokens: 240,
-				outputTokens: 40,
-				totalTokens: 400,
-				costTotal: 0.1,
-				unpricedRequests: 0,
+				requests: 3,
+				promptTokens: 360,
+				outputTokens: 60,
+				totalTokens: 600,
+				costTotal: 0.12,
+				unpricedRequests: 1,
 			},
 		],
 		models: [
@@ -102,11 +104,11 @@ function makeOverview(range: ContextOverview["range"] = "24h"): ContextOverview 
 				cacheWriteTokens: 10,
 				costTotal: 0.12,
 				unpricedRequests: 1,
-				sparkline: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 100, 50],
+				sparkline: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 100, 100],
 			},
 		],
 		omittedSessions: 1,
-		omittedRequests: 4,
+		omittedRequests: 1,
 		omittedPromptTokens: 10,
 	};
 }
@@ -266,6 +268,37 @@ describe("Context page", () => {
 		expect(container.textContent).toContain("~$0.12");
 	});
 
+
+
+	it("re-establishes one tab stop when the activity range changes", async () => {
+		const container = setupDom();
+		const seven = makeOverview("7d");
+		const thirty = {
+			...makeOverview("30d"),
+			cutoff: Date.now() - 30 * 24 * 60 * 60 * 1000,
+			heatmapBucketMs: 24 * 60 * 60 * 1000,
+			heatmap: [],
+		};
+		const render = async (overview: ContextOverview) => {
+			await act(async () => {
+				root?.render(
+					<ContextActivityGrid
+						overview={overview}
+						cells={buildActivityCells(overview)}
+						metric="requests"
+						selectedKey={null}
+						onSelect={() => {}}
+					/>,
+				);
+			});
+		};
+		await render(seven);
+		expect(container.querySelectorAll('.context-activity-cell').length).toBeGreaterThan(0);
+		expect([...container.querySelectorAll('.context-activity-cell')].filter(cell => cell.getAttribute('tabindex') === '0')).toHaveLength(1);
+		await render(thirty);
+		expect(container.querySelectorAll('.context-activity-cell').length).toBeGreaterThan(0);
+		expect([...container.querySelectorAll('.context-activity-cell')].filter(cell => cell.getAttribute('tabindex') === '0')).toHaveLength(1);
+	});
 
 	it("switches between session cards and the list without losing the rows", async () => {
 		const container = await renderRoute();

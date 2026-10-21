@@ -1,4 +1,4 @@
-import { type KeyboardEvent, useMemo, useRef, useState } from "react";
+import { type KeyboardEvent, useEffect, useMemo, useRef, useState } from "react";
 import { formatCompact } from "../../data/formatters";
 import type { ContextOverview } from "../../types";
 import type { ContextActivityCell } from "./view-models";
@@ -30,10 +30,24 @@ export function ContextActivityGrid({
 	onSelect: (cell: ContextActivityCell) => void;
 }) {
 	const refs = useRef(new Map<string, HTMLButtonElement>());
+	const gridRef = useRef<HTMLDivElement | null>(null);
 	const [focusKey, setFocusKey] = useState<string | null>(cells[0]?.key ?? null);
 	const daily = overview.range === "30d" || overview.range === "90d";
 	const oneHour = overview.range === "1h";
 	const max = Math.max(1, ...cells.map(cell => cell[metric]));
+	const tabbableKey = cells.some(cell => cell.key === focusKey) ? focusKey : cells[0]?.key;
+
+	useEffect(() => {
+		if (cells.length === 0) {
+			setFocusKey(null);
+			return;
+		}
+		if (focusKey && cells.some(cell => cell.key === focusKey)) return;
+		const wasInside = gridRef.current?.contains(document.activeElement) ?? false;
+		const next = cells[0]!.key;
+		setFocusKey(next);
+		if (wasInside) requestAnimationFrame(() => refs.current.get(next)?.focus());
+	}, [cells, focusKey]);
 
 	const rows = useMemo(() => {
 		const map = new Map<number, ContextActivityCell[]>();
@@ -71,13 +85,14 @@ export function ContextActivityGrid({
 		} else if (event.key === "ArrowDown") {
 			event.preventDefault();
 			move(cell, 1, 0);
-		} else if (event.key === "Home") {
+		} else if (event.key === "Home" || event.key === "End") {
 			event.preventDefault();
-			focusCell(cells.find(candidate => candidate.row === cell.row && candidate.col === 0));
-		} else if (event.key === "End") {
-			event.preventDefault();
-			const row = cells.filter(candidate => candidate.row === cell.row);
-			focusCell(row.at(-1));
+			if (event.ctrlKey || event.metaKey) {
+				focusCell(event.key === "Home" ? cells[0] : cells.at(-1));
+			} else {
+				const row = cells.filter(candidate => candidate.row === cell.row);
+				focusCell(event.key === "Home" ? row.at(0) : row.at(-1));
+			}
 		} else if (event.key === "Enter" || event.key === " ") {
 			event.preventDefault();
 			onSelect(cell);
@@ -115,7 +130,7 @@ export function ContextActivityGrid({
 					))}
 				</div>
 			)}
-			<div className="context-activity-grid" role="grid" aria-label={`${metric} activity`}>
+			<div className="context-activity-grid" role="grid" aria-label={`${metric} activity`} ref={gridRef}>
 				{rows.map(([rowIndex, rowCells]) => {
 					const padded = daily
 						? Array.from({ length: 7 }, (_, col) => rowCells.find(cell => cell.col === col))
@@ -141,7 +156,7 @@ export function ContextActivityGrid({
 										data-selected={selectedKey === cell.key}
 										aria-selected={selectedKey === cell.key}
 										aria-label={`${cell.label}: ${formatCompact(cell[metric])} ${metric}${cell.partial ? ", partial" : ""}`}
-										tabIndex={cell.key === focusKey || (!focusKey && col === 0) ? 0 : -1}
+										tabIndex={cell.key === tabbableKey ? 0 : -1}
 										onFocus={() => setFocusKey(cell.key)}
 										onKeyDown={event => onKeyDown(cell, event)}
 										onClick={() => onSelect(cell)}
