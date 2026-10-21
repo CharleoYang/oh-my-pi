@@ -373,6 +373,36 @@ describe("foldContextTimeline", () => {
 		expect(timeline.incompleteFileCalls).toBe(0);
 	});
 
+	test("keeps a shared selector owned by an unresolved ast_edit call", () => {
+		const timeline = foldContextTimeline(
+			input({
+				entries: [
+					assistant("a1", 1, 10, [
+						{
+							type: "toolCall",
+							id: "ast-resolved",
+							name: "ast_edit",
+							arguments: { ops: [], paths: ["src/*.ts"] },
+						},
+						{
+							type: "toolCall",
+							id: "ast-pending",
+							name: "ast_edit",
+							arguments: { ops: [], paths: ["src/*.ts"] },
+						},
+					]),
+					toolResult("r1", 2, "ast-resolved", "ast_edit", { files: ["src/0.ts"] }),
+				],
+			}),
+		);
+		expect(timeline.files.map(file => [file.path, file.edits]).sort()).toEqual([
+			["/work/src/*.ts", 1],
+			["/work/src/0.ts", 1],
+		]);
+		expect(timeline.steps[0]?.filePaths.sort()).toEqual(["/work/src/*.ts", "/work/src/0.ts"]);
+		expect(timeline.incompleteFileCalls).toBe(1);
+	});
+
 	test("keeps cost across the step cap", () => {
 		const timeline = foldContextTimeline(
 			input({

@@ -592,7 +592,15 @@ export function foldContextTimeline(input: ContextTimelineInput): ContextTimelin
 									provisional.bytesWritten === 0;
 								if (empty) files.delete(requested);
 							}
-							call.owner?.filePaths.delete(requested);
+							const owner = call.owner;
+							const stillOwned = [...pendingCalls.values()].some(
+								other =>
+									other !== call &&
+									other.owner === owner &&
+									!other.resolved &&
+									(other.path === requested || other.paths?.includes(requested)),
+							);
+							if (!stillOwned) owner?.filePaths.delete(requested);
 						}
 					}
 					for (const target of actual) {
