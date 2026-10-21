@@ -795,6 +795,17 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 		};
 	}
 
+	/**
+	 * Thinking override for a spawn. `task.enableEffort` gates the caller's
+	 * `effort` at runtime, not only in the advertised schema: stale transcripts
+	 * and lenient argument fallbacks still deliver the field, and honoring it
+	 * would override the agent's configured thinking selector.
+	 */
+	#effortParams(params: TaskParams): Pick<StructuredSubagentRequest, "effort"> {
+		if (params.effort === undefined || !cfgTaskEnableEffort.get(this.session.settings)) return {};
+		return { effort: params.effort };
+	}
+
 	#seanceSchemaFields() {
 		const spawnPolicy = resolveSpawnPolicy(this.session.getSessionSpawns());
 		const planMode = this.session.getPlanModeState?.()?.enabled === true;
@@ -914,7 +925,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 			sourceSession: params.sourceSession,
 			model: params.model,
 			...this.#resultParams(params),
-			...(params.effort !== undefined ? { effort: params.effort } : {}),
+			...this.#effortParams(params),
 			...(Object.hasOwn(params, "model") ? { model: params.model } : {}),
 			...("isolated" in params ? { isolation: { requested: params.isolated } } : {}),
 			blockedAgent: this.#blockedAgent,
@@ -1742,7 +1753,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 				sourceSession: params.sourceSession,
 				model: params.model,
 				...this.#resultParams(params),
-				...(params.effort !== undefined ? { effort: params.effort } : {}),
+				...this.#effortParams(params),
 				...(Object.hasOwn(params, "model") ? { model: params.model } : {}),
 				solutionSpace: params.solutionSpace,
 				...(params.tools?.length

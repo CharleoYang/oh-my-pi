@@ -76,7 +76,7 @@ export function buildAsyncResultBlock(message: CustomOrHookMessage): ToolActivit
 	if (details?.meta?.artifactError) {
 		rows.push({ parts: [{ text: formatArtifactErrorNotice(details.meta.artifactError), color: "warning" }] });
 	}
-	return new ToolActivityContainer(new TranscriptStatusBlock(rows));
+	return new ToolActivityContainer(new TranscriptStatusBlock(rows), { visibleInFocusMode: true });
 }
 
 /**
@@ -108,7 +108,7 @@ export function buildLaunchCompletionBlock(message: CustomOrHookMessage): ToolAc
 			],
 		});
 	}
-	return new ToolActivityContainer(new TranscriptStatusBlock(rows));
+	return new ToolActivityContainer(new TranscriptStatusBlock(rows), { visibleInFocusMode: true });
 }
 
 /**

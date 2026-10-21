@@ -12,10 +12,12 @@ export function isToolActivityComponent(component: Component): component is Comp
 
 export class ToolActivityContainer extends Container implements ToolActivityComponent {
 	#visible = true;
+	readonly #visibleInFocusMode: boolean;
 	#native: { children: readonly Component[]; visible: boolean; node: NativeNode } | undefined;
 
-	constructor(component: Component | Component[]) {
+	constructor(component: Component | Component[], options?: { visibleInFocusMode?: boolean }) {
 		super();
+		this.#visibleInFocusMode = options?.visibleInFocusMode ?? false;
 		if (Array.isArray(component)) {
 			for (const child of component) this.addChild(child);
 		} else {
@@ -42,7 +44,7 @@ export class ToolActivityContainer extends Container implements ToolActivityComp
 	}
 
 	override render(width: number): readonly string[] {
-		if (!this.#visible || chatTranscriptDisplayPreferences.focusMode) return [];
+		if (!this.#visible || (chatTranscriptDisplayPreferences.focusMode && !this.#visibleInFocusMode)) return [];
 		return super.render(width);
 	}
 
@@ -58,7 +60,7 @@ export class ToolActivityContainer extends Container implements ToolActivityComp
 			return cached.node;
 		}
 		const snapshot = children.slice();
-		const visible = this.#visible && !chatTranscriptDisplayPreferences.focusMode;
+		const visible = this.#visible && (!chatTranscriptDisplayPreferences.focusMode || this.#visibleInFocusMode);
 		const node = col(snapshot, visible ? { role: "omp.activity" } : { role: "omp.activity", hidden: true });
 		this.#native = { children: snapshot, visible: this.#visible, node };
 		return node;

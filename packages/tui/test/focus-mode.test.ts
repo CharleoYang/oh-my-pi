@@ -6,6 +6,8 @@ import { chatTranscriptDisplayPreferences } from "@oh-my-pi/pi-tui/chat/display-
 import { FocusSummaryComponent, formatFocusSummary, isFocusExpandable } from "@oh-my-pi/pi-tui/chat/focus-summary";
 import { buildIrcMessageCard } from "@oh-my-pi/pi-tui/chat/transcript-render-helpers";
 import { initTheme } from "@oh-my-pi/pi-tui/theme";
+import { TranscriptStatusBlock } from "@oh-my-pi/pi-tui/chrome/transcript-status";
+import { ToolActivityContainer } from "@oh-my-pi/pi-tui/chrome/tool-activity";
 
 const WIDTH = 80;
 
@@ -80,6 +82,17 @@ describe("focus mode tool folding", () => {
 		expect(group.render(80)).toEqual([]);
 		group.setFocusExpanded(true);
 		expect(group.render(80)).toEqual([]);
+	});
+
+	it("keeps status-only activity visible in focus mode while hiding tool activity", () => {
+		chatTranscriptDisplayPreferences.focusMode = true;
+		const status = new TranscriptStatusBlock([{ parts: [{ text: "status row", color: "dim" }] }]);
+		const visible = new ToolActivityContainer(status, { visibleInFocusMode: true });
+		const hidden = new ToolActivityContainer(
+			new TranscriptStatusBlock([{ parts: [{ text: "hidden row", color: "dim" }] }]),
+		);
+		expect(Bun.stripANSI(visible.render(80).join("\n"))).toContain("status row");
+		expect(hidden.render(80)).toEqual([]);
 	});
 
 	it("folds IRC traffic cards until the turn's summary expands them", () => {
