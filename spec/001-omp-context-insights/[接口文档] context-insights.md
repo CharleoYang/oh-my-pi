@@ -144,6 +144,8 @@ export interface ContextFileActivity {
 
 export interface ContextAgentUsage {
   trackId: string;
+  /** Absolute transcript filename for fleet drill-down. */
+  file?: string;
   label: string;
   agent?: string;
   model?: string;
@@ -168,6 +170,10 @@ export interface ContextTimeline {
   composition?: ContextCategoryTokens;
   contextWindow?: number;
   peakTokens: number;
+  /** Usage cost across every eligible step, including steps beyond `maxSteps`. */
+  costTotal: number;
+  /** Max promptTokens across every eligible step, including steps beyond `maxSteps`. */
+  peakTokensTotal: number;
   events: ContextEvent[];
   omittedEvents: number;
   files: ContextFileActivity[];
