@@ -418,6 +418,7 @@ export class Agent {
 	#convertToLlm: (messages: AgentMessage[]) => Message[] | Promise<Message[]>;
 	#transformContext?: (messages: AgentMessage[], signal?: AbortSignal) => Promise<AgentMessage[]>;
 	#transformProviderContext?: (context: Context, model: Model) => Context | Promise<Context>;
+	#afterProviderContextHooks = new Set<(context: Context, model: Model) => Promise<void> | void>();
 	#sentToolDefinitions = new SentToolDefinitions();
 	#steeringQueue: AgentMessage[] = [];
 	#followUpQueue: AgentMessage[] = [];
@@ -975,6 +976,12 @@ export class Agent {
 
 	async #runBeforeModelCallHooks(signal: AbortSignal | undefined, context: AgentContext): Promise<void> {
 		for (const hook of this.#beforeModelCallHooks) await hook(signal, context);
+	}
+
+	/** Register a hook that observes the final provider context after conversion/transforms. */
+	addAfterProviderContextHook(hook: (context: Context, model: Model) => Promise<void> | void): () => void {
+		this.#afterProviderContextHooks.add(hook);
+		return () => this.#afterProviderContextHooks.delete(hook);
 	}
 
 	async #runBeforeQueuedMessageDequeueHooks(signal?: AbortSignal): Promise<void> {
@@ -1901,6 +1908,9 @@ export class Agent {
 			preferWebsockets: this.#preferWebsockets,
 			convertToLlm: this.#convertToLlm,
 			transformProviderContext: this.#transformProviderContext,
+			afterProviderContext: async (context, model) => {
+				for (const hook of this.#afterProviderContextHooks) await hook(context, model);
+			},
 			sentToolDefinitions: this.#sentToolDefinitions,
 			transformContext: this.#transformContext,
 			onPayload: this.#onPayload,

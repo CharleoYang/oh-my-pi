@@ -250,6 +250,8 @@ export interface AgentLoopConfig extends SimpleStreamOptions {
 	 * and provider send.
 	 */
 	transformProviderContext?: (context: Context, model: Model) => Context | Promise<Context>;
+	/** Observes the final provider context after conversion and provider transforms. */
+	afterProviderContext?: (context: Context, model: Model) => Promise<void> | void;
 
 	/** Remembers sent tool definitions to fill {@link Context.inactiveTools}. */
 	sentToolDefinitions?: SentToolDefinitions;

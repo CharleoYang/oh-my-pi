@@ -5,7 +5,8 @@
 ### Added
 
 - `/context` now opens a focused four-tab Context panel with Overview, Trend, Events, and Files, including keyboard navigation, optional deltas, and live history refresh. Interactive reports use a full-screen page in ANSI terminals even when short, while native terminals keep their focused sheet. Context history remains available without a selected model; non-TUI context reports are unchanged.
-- Persisted bounded request-time `contextSnapshot.details` (category tokens, named tool/skill estimates, system-part token counts and message counts) without prompt/message bodies; live timelines share the stats journal fold and never reconstruct legacy details. Added source-only terminal/HTTP/Chromium Context acceptance coverage with temporary data isolation and an installed-binary no-overwrite gate.
+- Persisted bounded per-provider-request `contextSnapshot.details` (category tokens, named tool/skill estimates, system-part token counts and message counts) without prompt/message bodies; live timelines share the stats journal fold and never reconstruct legacy details. Added source-only terminal/HTTP/Chromium Context acceptance coverage with temporary data isolation and an installed-binary no-overwrite gate.
+- Fixed context snapshots in tool continuations reusing the first request's composition and message counts; details are now recaptured at every provider request boundary.
 - Focus mode (`/focus`, `display.focusMode`): the transcript shows prompts, final answers, and one clickable activity line per turn (`✻ N tools · M subagents`) while tool activity, thinking, and interim assistant messages are hidden until focus mode is turned off. Clicking a summary expands and folds that turn's hidden work in place; folded requests do not stack their own usage rows, so every turn keeps exactly one stats line. Tool visibility shortcuts explain that focus mode owns the toggle.
 
 ### Changed

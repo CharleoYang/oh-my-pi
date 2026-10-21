@@ -291,6 +291,118 @@ describe("foldContextTimeline", () => {
 		expect(timeline.steps[0]?.eventIds).toEqual([]);
 	});
 
+	test("folds ast_edit multi-path calls and results", () => {
+		const timeline = foldContextTimeline(
+			input({
+				entries: [
+					assistant("a1", 1, 10, [
+						{
+							type: "toolCall",
+							id: "ast-1",
+							name: "ast_edit",
+							arguments: { ops: [{ pat: "old()", out: "new()" }], paths: ["src/a.ts", "src/b.ts"] },
+						},
+						{
+							type: "toolCall",
+							id: "ast-2",
+							name: "ast_edit",
+							arguments: { ops: [{ pat: "x", out: "y" }], paths: ["src/c.ts"] },
+						},
+					]),
+					toolResult("r1", 2, "ast-1", "ast_edit", {
+						files: ["src/a.ts", "src/b.ts"],
+						fileReplacements: [{ path: "src/b.ts", count: 2 }],
+					}),
+				],
+			}),
+		);
+		expect(timeline.files.map(file => file.path)).toEqual(["/work/src/a.ts", "/work/src/b.ts", "/work/src/c.ts"]);
+		expect(Object.fromEntries(timeline.files.map(file => [file.path, file.edits]))).toEqual({
+			"/work/src/a.ts": 1,
+			"/work/src/b.ts": 1,
+			"/work/src/c.ts": 1,
+		});
+		expect(timeline.steps[0]?.filePaths).toEqual(["/work/src/a.ts", "/work/src/b.ts", "/work/src/c.ts"]);
+		expect(timeline.incompleteFileCalls).toBe(1);
+	});
+
+	test("deduplicates ast_edit spellings and replaces selectors with concrete files", () => {
+		const timeline = foldContextTimeline(
+			input({
+				entries: [
+					assistant("a1", 1, 10, [
+						{
+							type: "toolCall",
+							id: "ast-dup",
+							name: "ast_edit",
+							arguments: { ops: [], paths: ["src/a.ts", "./src/a.ts"] },
+						},
+						{
+							type: "toolCall",
+							id: "ast-glob",
+							name: "ast_edit",
+							arguments: { ops: [], paths: ["src/*.ts"] },
+						},
+						{
+							type: "toolCall",
+							id: "ast-glob-2",
+							name: "ast_edit",
+							arguments: { ops: [], paths: ["src/*.ts"] },
+						},
+					]),
+					toolResult("r1", 2, "ast-dup", "ast_edit", { files: ["src/a.ts"] }),
+					toolResult("r2", 2, "ast-glob", "ast_edit", {
+						files: ["src/x.ts", "src/y.ts"],
+						fileReplacements: [{ path: "src/y.ts", count: 1 }],
+					}),
+					toolResult("r3", 2, "ast-glob-2", "ast_edit", { files: ["src/x.ts"] }),
+				],
+			}),
+		);
+		expect(timeline.files.map(file => file.path).sort()).toEqual([
+			"/work/src/a.ts",
+			"/work/src/x.ts",
+			"/work/src/y.ts",
+		]);
+		expect(Object.fromEntries(timeline.files.map(file => [file.path, file.edits]))).toEqual({
+			"/work/src/a.ts": 1,
+			"/work/src/x.ts": 2,
+			"/work/src/y.ts": 1,
+		});
+		expect(timeline.steps[0]?.filePaths.sort()).toEqual(["/work/src/a.ts", "/work/src/x.ts", "/work/src/y.ts"]);
+		expect(timeline.incompleteFileCalls).toBe(0);
+	});
+
+	test("keeps a shared selector owned by an unresolved ast_edit call", () => {
+		const timeline = foldContextTimeline(
+			input({
+				entries: [
+					assistant("a1", 1, 10, [
+						{
+							type: "toolCall",
+							id: "ast-resolved",
+							name: "ast_edit",
+							arguments: { ops: [], paths: ["src/*.ts"] },
+						},
+						{
+							type: "toolCall",
+							id: "ast-pending",
+							name: "ast_edit",
+							arguments: { ops: [], paths: ["src/*.ts"] },
+						},
+					]),
+					toolResult("r1", 2, "ast-resolved", "ast_edit", { files: ["src/0.ts"] }),
+				],
+			}),
+		);
+		expect(timeline.files.map(file => [file.path, file.edits]).sort()).toEqual([
+			["/work/src/*.ts", 1],
+			["/work/src/0.ts", 1],
+		]);
+		expect(timeline.steps[0]?.filePaths.sort()).toEqual(["/work/src/*.ts", "/work/src/0.ts"]);
+		expect(timeline.incompleteFileCalls).toBe(1);
+	});
+
 	test("keeps cost across the step cap", () => {
 		const timeline = foldContextTimeline(
 			input({

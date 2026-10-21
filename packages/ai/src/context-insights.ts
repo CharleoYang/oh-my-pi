@@ -101,6 +101,8 @@ interface PendingToolCall {
 	id: string;
 	name: string;
 	path?: string;
+	/** Multi-target tools (ast_edit) resolve every requested file. */
+	paths?: string[];
 	resolved: boolean;
 	owner?: PendingStep;
 	/** Call-side write contribution, used to migrate counts to resolvedPath without double counting. */
@@ -442,14 +444,26 @@ export function foldContextTimeline(input: ContextTimelineInput): ContextTimelin
 						toolName === "read" || toolName === "write" || toolName === "edit" || toolName === "ast_edit";
 					const isSearchTool = SEARCH_TOOLS.has(toolName);
 					if (!isFileTool && !isSearchTool) continue;
-					const rawPath = args.path ?? args.file_path;
+					const astPaths =
+						toolName === "ast_edit" && Array.isArray(args.paths)
+							? [
+									...new Set(
+										args.paths
+											.filter((value): value is string => typeof value === "string" && value.length > 0)
+											.map(value => resolveToolPath({ path: value }, input.normalizePath))
+											.filter((value): value is string => value !== undefined),
+									),
+								]
+							: [];
+					const rawPath = astPaths[0] ?? args.path ?? args.file_path;
 					const hasRawPath = typeof rawPath === "string" && rawPath.length > 0;
-					const path = resolveToolPath(args, input.normalizePath);
+					const path = astPaths[0] ?? resolveToolPath(args, input.normalizePath);
 					if (!path && !(isSearchTool && !hasRawPath)) continue;
 					const call: PendingToolCall = {
 						id: toolId,
 						name: toolName,
 						...(path ? { path } : {}),
+						...(astPaths.length > 0 ? { paths: astPaths } : {}),
 						resolved: false,
 						owner: pending,
 					};
@@ -465,9 +479,12 @@ export function foldContextTimeline(input: ContextTimelineInput): ContextTimelin
 						file.writes++;
 						file.linesAdded += lines;
 						file.bytesWritten += bytes;
-					} else if (toolName === "edit" || toolName === "ast_edit") file.edits++;
-					else if (isSearchTool) file.searches++;
-					pending.filePaths.add(activityPath);
+					} else if (toolName === "edit") file.edits++;
+					else if (toolName === "ast_edit") {
+						const targets = astPaths.length > 0 ? astPaths : [activityPath];
+						for (const target of targets) activity(target, stepTimestamp).edits++;
+					} else if (isSearchTool) file.searches++;
+					for (const target of astPaths.length > 0 ? astPaths : [activityPath]) pending.filePaths.add(target);
 				}
 				steps.push(pending);
 				continue;
@@ -542,7 +559,60 @@ export function foldContextTimeline(input: ContextTimelineInput): ContextTimelin
 							call.owner.filePaths.add(resolved);
 						}
 					}
-				} else if (call.name === "edit" || call.name === "ast_edit") {
+				} else if (call.name === "ast_edit") {
+					const named = [
+						...asArray(resultDetails?.files),
+						...asArray(resultDetails?.fileReplacements).map(item =>
+							isRecord(item) && typeof item.path === "string" ? item.path : undefined,
+						),
+					];
+					const actual = new Set<string>();
+					for (const raw of named) {
+						if (typeof raw !== "string") continue;
+						const resolved = resolveToolPath({ path: raw }, input.normalizePath);
+						if (resolved) actual.add(resolved);
+					}
+					if (actual.size > 0 && call.paths) {
+						// Drop provisional directories/globs and duplicate spellings once the
+						// result names the concrete files that were actually rewritten.
+						for (const requested of call.paths) {
+							if (actual.has(requested)) continue;
+							const provisional = files.get(requested);
+							if (provisional) {
+								provisional.edits = Math.max(0, provisional.edits - 1);
+								const empty =
+									provisional.reads === 0 &&
+									provisional.writes === 0 &&
+									provisional.edits === 0 &&
+									provisional.searches === 0 &&
+									provisional.linesRead === 0 &&
+									provisional.linesAdded === 0 &&
+									provisional.linesRemoved === 0 &&
+									provisional.bytesRead === 0 &&
+									provisional.bytesWritten === 0;
+								if (empty) files.delete(requested);
+							}
+							const owner = call.owner;
+							const stillOwned = [...pendingCalls.values()].some(
+								other =>
+									other !== call &&
+									other.owner === owner &&
+									!other.resolved &&
+									(other.path === requested || other.paths?.includes(requested)),
+							);
+							if (!stillOwned) owner?.filePaths.delete(requested);
+						}
+					}
+					for (const target of actual) {
+						if (!call.paths?.includes(target)) {
+							activity(target, timestampOf(message.timestamp ?? entry.timestamp)).edits++;
+							call.owner?.filePaths.add(target);
+						}
+					}
+					// The result has reconciled this call's selectors; earlier calls
+					// processing the same selector must not treat this call as still using it.
+					if (actual.size > 0) call.paths = undefined;
+				} else if (call.name === "edit") {
 					const perFile = asArray(resultDetails?.perFileResults);
 					if (perFile.length > 0) {
 						for (const item of perFile) {

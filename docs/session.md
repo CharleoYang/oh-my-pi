@@ -170,7 +170,7 @@ Stores an `AgentMessage` directly.
 
 #### Optional request-time context snapshot details
 
-Assistant `message.contextSnapshot` may contain `promptTokens`, `nonMessageTokens`, `toolSchemaTokens`, `compactionEpoch`, and optional `details`. `details` captures request-time estimates, not message/system-prompt/tool-result bodies:
+Assistant `message.contextSnapshot` may contain `promptTokens`, `nonMessageTokens`, `toolSchemaTokens`, `compactionEpoch`, and optional `details`. `details` captures per-provider-request estimates, not message/system-prompt/tool-result bodies:
 
 - `contextWindow` and five token categories: `systemPrompt`, `systemTools`, `systemContext`, `skills`, `messages`.
 - Named `toolSchemas` and `skills` (`{ name, tokens }`), capped at 200 entries each; `omittedToolSchemas` / `omittedSkills` count excluded names.

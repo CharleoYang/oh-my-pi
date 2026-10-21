@@ -33,6 +33,7 @@ import {
 	type AgentToolResult,
 	type AgentTurnEndContext,
 	AppendOnlyContextManager,
+	type AgentContext,
 	type AsideMessage,
 	type BeforeToolCallContext,
 	type BeforeToolCallResult,
@@ -2708,6 +2709,9 @@ export class AgentSession implements SettingsScope {
 			this.agent.addBeforeModelCallHook((_signal, context) =>
 				this.#maintenance.renderArchiveForModel(context.messages),
 			),
+		);
+		this.addDisposer(
+			this.agent.addAfterProviderContextHook(context => this.#captureProviderRequestSnapshot(context)),
 		);
 
 		const handoffHost: SessionHandoffHost = {
@@ -8734,34 +8738,6 @@ export class AgentSession implements SettingsScope {
 			}
 
 			const agentPromptOptions = options?.toolChoice ? { toolChoice: options.toolChoice } : undefined;
-			const nonMessageTokens = computeNonMessageTokens(this, this.agent.tokenizer, this.settings.revision);
-			const contextWindow = this.model?.contextWindow ?? 0;
-			const breakdown = this.getContextBreakdown({ contextWindow, pendingMessages: messages });
-			const promptTokens =
-				breakdown?.usedTokens ??
-				nonMessageTokens +
-					this.agent.tokenizer.countMessages(this.messages) +
-					this.agent.tokenizer.countMessages(messages);
-			const details = breakdown
-				? captureContextSnapshotDetails({
-						breakdown,
-						contextWindow,
-						systemPrompt: this.systemPrompt,
-						tools: this.agent.state.tools,
-						skills: this.renderedSkills,
-						model: this.model,
-						tokenizer: this.agent.tokenizer,
-						sourceRevision: this.settings.revision,
-						messageCount: this.messages.length + messages.length,
-						pendingMessages: messages,
-					})
-				: undefined;
-			this.#stats.setPendingSnapshot({
-				promptTokens,
-				nonMessageTokens,
-				cutoffCount: this.messages.length + messages.length,
-				...(details ? { details } : {}),
-			});
 			// Commit the plan-reference delivery flag only now that the message is
 			// actually handed to agent.prompt. Every pre-send setup step above can
 			// return (generation-bail) or throw (@-mention reads, before_agent_start
@@ -13409,6 +13385,36 @@ export class AgentSession implements SettingsScope {
 	 * Uses the last assistant message's usage data when available,
 	 * otherwise estimates tokens for all messages.
 	 */
+	/** Recompute composition at the exact provider-request boundary, not once per prompt. */
+	#captureProviderRequestSnapshot(context: Context): void {
+		const contextWindow = this.model?.contextWindow ?? 0;
+		const base = this.getContextBreakdown({ contextWindow });
+		if (!base) return;
+		const nonMessageTokens =
+			base.systemPromptTokens + base.systemToolsTokens + base.systemContextTokens + base.skillsTokens;
+		const messagesTokens = this.agent.tokenizer.countMessages(context.messages);
+		const usedTokens = nonMessageTokens + messagesTokens;
+		const breakdown = { ...base, anchored: false, usedTokens, messagesTokens };
+		const details = captureContextSnapshotDetails({
+			breakdown,
+			contextWindow,
+			systemPrompt: context.systemPrompt ?? this.systemPrompt,
+			tools: context.tools ?? [],
+			skills: this.renderedSkills,
+			model: this.model,
+			tokenizer: this.agent.tokenizer,
+			sourceRevision: this.settings.revision,
+			messageCount: context.messages.length,
+			pendingMessages: [],
+		});
+		this.#stats.setPendingSnapshot({
+			promptTokens: usedTokens,
+			nonMessageTokens,
+			cutoffCount: context.messages.length,
+			...(details ? { details } : {}),
+		});
+	}
+
 	getContextBreakdown(options?: {
 		contextWindow?: number;
 		pendingMessages?: AgentMessage[];
