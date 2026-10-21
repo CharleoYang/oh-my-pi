@@ -7,7 +7,7 @@ describe("context view models", () => {
 			cutoff: 0,
 			heatmapBucketMs: 10,
 			heatmap: [{ bucket: 10, requests: 2, promptTokens: 5 }],
-		} as const;
+		};
 		expect(heatmapBuckets(overview, 20)).toEqual([0, 10, 20]);
 		expect(
 			denseHeatmap(

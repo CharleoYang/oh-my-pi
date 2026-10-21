@@ -136,6 +136,8 @@ const timeline: ContextTimeline = {
 	composition: { systemPrompt: 20, systemTools: 10, systemContext: 10, skills: 10, messages: 70 },
 	contextWindow: 1000,
 	peakTokens: 120,
+	peakTokensTotal: 120,
+	costTotal: 0,
 	events: [{ id: "e", timestamp: 1_700_000_001_000, kind: "compact", label: "Compaction", stepIndex: 1 }],
 	omittedEvents: 0,
 	files: [

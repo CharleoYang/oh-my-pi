@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState } from "react";
 import { getSessionContext } from "../../api";
 import { formatCompact, formatInteger } from "../../data/formatters";
 import { useQuery } from "../../data/query";
+import type { ContextTimeline } from "../../types";
 import { Badge, Card, PageHeader, QueryView, TableSkeleton } from "../../ui";
 import { BrowserTab } from "./BrowserTab";
 import { CompositionTab } from "./CompositionTab";
@@ -29,7 +30,7 @@ export function ContextDetail({
 	const [selected, setSelected] = useState(-1);
 	const [rootFile, setRootFile] = useState(file);
 	const [displayFile, setDisplayFile] = useState(file);
-	const query = useQuery(
+	const query = useQuery<ContextTimeline>(
 		["session-context", displayFile],
 		({ signal }, previous) => getSessionContext(displayFile, signal, previous),
 		{ pollMs: 15000, enabled: active },

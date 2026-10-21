@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import { getContextOverview } from "../api";
 import { formatCompact, formatInteger, formatPercent, formatRelativeTime } from "../data/formatters";
 import { useQuery } from "../data/query";
+import type { ContextSessionRow, TimeRange } from "../types";
 import {
 	Badge,
 	Card,

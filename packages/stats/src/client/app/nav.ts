@@ -5,6 +5,7 @@ import {
 	Cpu,
 	FolderGit2,
 	Frown,
+	Gauge,
 	LayoutGrid,
 	type LucideIcon,
 	PlugZap,

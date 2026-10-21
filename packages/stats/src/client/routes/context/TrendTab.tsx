@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import { Chart } from "../../charts";
+import type { ChartSeries } from "../../charts/types";
 import { formatCompact, formatTimestamp } from "../../data/formatters";
 import { Segmented } from "../../ui";
 import type { ContextTimeline } from "../../types";
@@ -19,7 +20,7 @@ export function TrendTab({
 	const [delta, setDelta] = useState<"prompt" | "delta">("prompt");
 	const steps = timeline.steps.slice(-200);
 	const offset = timeline.steps.length - steps.length;
-	const series = useMemo(() => {
+	const series = useMemo<ChartSeries[]>(() => {
 		if (delta === "delta")
 			return [
 				{ key: "delta", label: "Δ prompt", color: COLORS[2]!, values: steps.map(step => step.deltaTokens ?? null) },
