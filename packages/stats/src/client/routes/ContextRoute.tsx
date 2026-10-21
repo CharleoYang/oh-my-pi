@@ -37,6 +37,7 @@ export function ContextRoute({ active, range, session, onOpenSession }: ContextR
 	if (session !== null)
 		return (
 			<ContextDetail
+				key={session}
 				file={session}
 				active={active}
 				onBack={() => onOpenSession(null)}

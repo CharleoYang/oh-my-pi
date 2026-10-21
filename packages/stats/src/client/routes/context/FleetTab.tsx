@@ -8,7 +8,7 @@ export function FleetTab({
 	onOpenAgent,
 }: {
 	timeline: ContextTimeline;
-	onOpenAgent: (trackId: string) => void;
+	onOpenAgent: (agent: ContextAgentUsage) => void;
 }) {
 	const columns = useMemo<Column<ContextAgentUsage>[]>(
 		() => [
@@ -77,7 +77,7 @@ export function FleetTab({
 				columns={columns}
 				rows={timeline.agents}
 				rowKey={agent => agent.trackId}
-				onRowClick={agent => agent.status === "subagent" && onOpenAgent(agent.trackId)}
+				onRowClick={agent => agent.status === "subagent" && onOpenAgent(agent)}
 				initialSort={{ key: "requests", dir: "desc" }}
 				empty={<p className="dim">No child transcripts recorded.</p>}
 			/>

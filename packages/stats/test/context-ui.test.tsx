@@ -160,6 +160,7 @@ const timeline: ContextTimeline = {
 	agents: [
 		{
 			trackId: "child",
+			file: "/tmp/child.jsonl",
 			label: "child",
 			agent: "worker",
 			model: "model-a",
@@ -177,13 +178,19 @@ function response(payload: unknown, headers?: HeadersInit): Response {
 	return Response.json(payload, { headers });
 }
 
-async function renderRoute(file: string | null = null, range: "24h" | "all" = "24h") {
+async function renderRoute(
+	file: string | null = null,
+	range: "24h" | "all" = "24h",
+	requests: string[] = [],
+	detail: ContextTimeline = timeline,
+) {
 	const container = setupDom();
 	const fetchStub = Object.assign(
 		async (input: FetchInput, _init?: FetchInit) => {
 			const url = input.toString();
+			requests.push(url);
 			if (url.includes("/api/context/overview")) return response(makeOverview(range === "all" ? "90d" : range));
-			return response(timeline, { ETag: '"v1"' });
+			return response(detail, { ETag: '"v1"' });
 		},
 		{ preconnect: globalThis.fetch.preconnect },
 	);
@@ -250,6 +257,46 @@ describe("Context page", () => {
 		expect(container.textContent).toContain("child");
 		expect(container.textContent).not.toContain("message body");
 	});
+	it("drills into a fleet child by its actual filename", async () => {
+		const requests: string[] = [];
+		const container = await renderRoute("/tmp/detail.jsonl", "24h", requests);
+		const fleet = [...container.querySelectorAll("button")].find(button => button.textContent === "Fleet");
+		if (!fleet) throw new Error("Fleet tab missing");
+		await act(async () => {
+			fleet.click();
+		});
+		const row = container.querySelector("tbody tr");
+		if (!row) throw new Error("fleet row missing");
+		await act(async () => {
+			(row as HTMLElement).click();
+		});
+		expect(requests.some(url => url.includes("file=%2Ftmp%2Fchild.jsonl"))).toBe(true);
+		expect(container.textContent).toContain("Viewing subagent");
+	});
+
+	it("rejects unsupported timeline schemas before rendering fields", async () => {
+		const file = `/tmp/schema-${++sequence}.jsonl`;
+		const container = await renderRoute(file, "24h", [], {
+			...(timeline as unknown as Record<string, unknown>),
+			file,
+			schemaVersion: 2,
+		} as never);
+		expect(container.textContent).toContain("Unsupported context timeline schemaVersion 2");
+		expect(container.textContent).not.toContain("Prompt composition");
+	});
+
+	it("renders system-part details in the Browser tab", async () => {
+		const container = await renderRoute("/tmp/detail.jsonl");
+		const browser = [...container.querySelectorAll("button")].find(button => button.textContent === "Browser");
+		if (!browser) throw new Error("Browser tab missing");
+		await act(async () => {
+			browser.click();
+		});
+		expect(container.textContent).toContain("System parts");
+		expect(container.textContent).toContain("part 0");
+		expect(container.textContent).toContain("20");
+	});
+
 	it("revalidates session context with ETag without parsing a 304 body", async () => {
 		const payload = { ...timeline, file: `/tmp/etag-${++sequence}.jsonl` };
 		const ifNoneMatch: (string | null)[] = [];

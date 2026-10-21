@@ -115,6 +115,8 @@ export interface ContextFileActivity {
 
 export interface ContextAgentUsage {
 	trackId: string;
+	/** Absolute transcript filename for fleet drill-down. */
+	file?: string;
 	label: string;
 	agent?: string;
 	model?: string;

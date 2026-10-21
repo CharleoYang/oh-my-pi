@@ -4,7 +4,7 @@ import { getSessionContext } from "../../api";
 import { formatCompact, formatInteger } from "../../data/formatters";
 import { useQuery } from "../../data/query";
 import type { ContextTimeline } from "../../types";
-import { Badge, Card, PageHeader, QueryView, TableSkeleton } from "../../ui";
+import { Badge, Card, ErrorState, PageHeader, QueryView, TableSkeleton } from "../../ui";
 import { BrowserTab } from "./BrowserTab";
 import { CompositionTab } from "./CompositionTab";
 import { EventsTab } from "./EventsTab";
@@ -35,7 +35,7 @@ export function ContextDetail({
 		({ signal }, previous) => getSessionContext(displayFile, signal, previous),
 		{ pollMs: 15000, enabled: active },
 	);
-	const timeline = query.stale || (displayFile === rootFile && rootFile !== file) ? null : query.data;
+	const timeline = query.stale || rootFile !== file ? null : query.data;
 	useEffect(() => {
 		setSelected(-1);
 		setTab("composition");
@@ -48,11 +48,21 @@ export function ContextDetail({
 		? Math.min(selected < 0 ? timeline.steps.length - 1 : selected, Math.max(0, timeline.steps.length - 1))
 		: 0;
 	const child = displayFile !== rootFile;
-	const selectAgent = (trackId: string) => {
-		if (trackId === "main") return;
-		setDisplayFile(trackId.startsWith("/") ? trackId : `${rootFile}/${trackId}`);
+	const selectAgent = (agent: ContextTimeline["agents"][number]) => {
+		if (agent.status !== "subagent" || !agent.file) return;
+		setDisplayFile(agent.file);
 	};
 	const tabs = useMemo(() => TABS.map(value => ({ value, label: value[0]!.toUpperCase() + value.slice(1) })), []);
+	if (timeline && timeline.schemaVersion !== 1) {
+		return (
+			<div className="stack context-detail">
+				<PageHeader title="Context detail" />
+				<ErrorState
+					error={`Unsupported context timeline schemaVersion ${String(timeline.schemaVersion)}; this dashboard only reads version 1.`}
+				/>
+			</div>
+		);
+	}
 	return (
 		<div className="stack context-detail">
 			<PageHeader
@@ -123,7 +133,7 @@ export function ContextDetail({
 					) : tab === "events" ? (
 						<EventsTab timeline={data} onSelect={setSelected} />
 					) : tab === "files" ? (
-						<FilesTab timeline={data} onOpenTrace={() => onOpenTrace(rootFile)} />
+						<FilesTab timeline={data} onOpenTrace={() => onOpenTrace(displayFile)} />
 					) : (
 						<FleetTab timeline={data} onOpenAgent={selectAgent} />
 					)

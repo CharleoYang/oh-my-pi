@@ -46,6 +46,18 @@ export function BrowserTab({
 					<div className="context-browser-details">
 						<BrowserList title="Tools" items={tools} omitted={details.omittedToolSchemas} />
 						<BrowserList title="Skills" items={skills} omitted={details.omittedSkills} />
+						<div className="context-browser-list">
+							<h3>System parts</h3>
+							{(details.systemPromptParts ?? []).map((tokens, index) => (
+								<div key={index}>
+									<span className="mono">part {index}</span>
+									<span className="num">{formatCompact(tokens)}</span>
+								</div>
+							))}
+							{details.systemPromptPartsOmitted ? (
+								<span className="micro">+{details.systemPromptPartsOmitted} merged into the last part</span>
+							) : null}
+						</div>
 						<p className="micro">
 							Messages: {details.messageCount} · pending tokens: {formatCompact(details.pendingMessageTokens)} ·
 							context window: {formatCompact(details.contextWindow)}
