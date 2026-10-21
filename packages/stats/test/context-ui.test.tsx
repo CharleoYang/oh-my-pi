@@ -721,6 +721,11 @@ describe("Context page", () => {
 		expect(container.textContent).toContain("System parts");
 		expect(container.textContent).toContain("part 0");
 		expect(container.textContent).toContain("20");
+		const barBackgrounds = [...container.querySelectorAll(".context-category-track i")].map(
+			element => (element as HTMLElement).style.background,
+		);
+		expect(barBackgrounds).toContain("var(--ctx-system-tools)");
+		expect(barBackgrounds).toContain("var(--ctx-system-prompt)");
 	});
 
 	it("revalidates session context with ETag without parsing a 304 body", async () => {
