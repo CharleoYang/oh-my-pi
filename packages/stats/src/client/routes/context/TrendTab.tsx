@@ -3,35 +3,41 @@ import { Chart } from "../../charts";
 import type { ChartSeries } from "../../charts/types";
 import { formatCompact, formatTimestamp } from "../../data/formatters";
 import { Segmented } from "../../ui";
-import type { ContextTimeline } from "../../types";
+import type { ContextEvent, ContextTimeline } from "../../types";
+import { ContextEventPins } from "./ContextEventPins";
+import { ContextOverviewRibbon } from "./ContextOverviewRibbon";
+import { ContextStepBrief } from "./ContextStepBrief";
+import { CATEGORY_KEYS, CATEGORY_STYLE } from "./view-models";
 
-const COLORS = ["#e07850", "#4e9b8a", "#7885c9", "#c49a54", "#9b6aae"];
-const KEYS = ["systemPrompt", "systemTools", "systemContext", "skills", "messages"] as const;
+const WINDOW_OPTIONS = [
+	{ value: "50", label: "50" },
+	{ value: "100", label: "100" },
+	{ value: "200", label: "200" },
+	{ value: "0", label: "All" },
+] as const;
 
 export function TrendTab({
 	timeline,
 	selected,
 	onSelect,
+	onOpenBrowser,
+	onOpenEvent,
 }: {
 	timeline: ContextTimeline;
 	selected: number;
 	onSelect: (index: number) => void;
+	onOpenBrowser: () => void;
+	onOpenEvent: (event: ContextEvent) => void;
 }) {
-	const [delta, setDelta] = useState<"prompt" | "delta">("prompt");
-	const steps = timeline.steps.slice(-200);
+	const [mode, setMode] = useState<"prompt" | "delta">("prompt");
+	const [windowSize, setWindowSize] = useState("100");
+	const steps = timeline.steps.slice(windowSize === "0" ? 0 : -Number(windowSize));
 	const offset = timeline.steps.length - steps.length;
 	const series = useMemo<ChartSeries[]>(() => {
-		const composition = KEYS.map((key, index) => ({
+		const composition = CATEGORY_KEYS.map(key => ({
 			key,
-			label:
-				key === "systemPrompt"
-					? "System prompt"
-					: key === "systemTools"
-						? "System tools"
-						: key === "systemContext"
-							? "System context"
-							: key[0]!.toUpperCase() + key.slice(1),
-			color: COLORS[index]!,
+			label: CATEGORY_STYLE[key].label,
+			color: CATEGORY_STYLE[key].color,
 			values: steps.map(step => step.composition?.[key] ?? null),
 		}));
 		return [
@@ -39,62 +45,96 @@ export function TrendTab({
 			{
 				key: "total",
 				label: "Total",
-				color: "#f5c56b",
+				color: "var(--ink-1)",
 				kind: "line" as const,
 				values: steps.map(step => step.promptTokens),
 				tooltip: false,
 			},
 		];
 	}, [steps]);
+	const briefStep = timeline.steps[selected] ?? steps.at(-1);
+	const latestWindow = timeline.steps.at(-1)?.contextWindow ?? timeline.contextWindow;
+	const contextWindow = latestWindow && latestWindow > 0 ? latestWindow : undefined;
 	return (
 		<section className="card context-trend">
 			<header className="card-header">
 				<div className="card-titles">
 					<h2 className="card-title">Trend</h2>
 					<p className="card-description">
-						Last {steps.length} steps · selected #{timeline.steps[selected]?.index ?? "-"}
+						Last {steps.length} steps · selected #{timeline.steps[selected]?.index ?? steps.at(-1)?.index ?? "-"}
 					</p>
 				</div>
-				<Segmented
-					aria-label="Trend metric"
-					value={delta}
-					onChange={setDelta}
-					options={[
-						{ value: "prompt", label: "Composition" },
-						{ value: "delta", label: "Δ" },
-					]}
-					size="sm"
-				/>
+				<div className="context-toolbar">
+					<Segmented
+						aria-label="Trend metric"
+						value={mode}
+						onChange={setMode}
+						options={[
+							{ value: "prompt", label: "Composition" },
+							{ value: "delta", label: "Δ" },
+						]}
+						size="sm"
+					/>
+					<Segmented
+						aria-label="Trend window"
+						value={windowSize}
+						onChange={setWindowSize}
+						options={WINDOW_OPTIONS.map(option => ({ ...option }))}
+						size="sm"
+					/>
+				</div>
 			</header>
 			<div className="card-body">
-				<div className="context-marker-strip">
-					{steps.map(step => (
-						<button
-							type="button"
-							key={step.id}
-							className={timeline.steps[selected]?.id === step.id ? "context-marker selected" : "context-marker"}
-							title={`${formatTimestamp(step.timestamp)} · ${step.deltaKind}`}
-							onClick={() => onSelect(offset + steps.indexOf(step))}
-						/>
-					))}
-				</div>
-				{delta === "delta" ? (
-					<DeltaList steps={steps} offset={offset} selected={selected} timeline={timeline} onSelect={onSelect} />
-				) : (
-					<Chart
-						slots={steps.length}
-						tickLabel={index => `#${steps[index]?.index ?? ""}`}
-						series={series}
-						onSelect={index => onSelect(offset + index)}
-						format={formatCompact}
-						tooltipExtra={index => (
-							<span>
-								{formatTimestamp(steps[index]!.timestamp)} · step #{steps[index]!.index}
-							</span>
+				<ContextEventPins events={timeline.events} steps={timeline.steps} onSelect={index => onSelect(index)} />
+				<div className="context-trend-body">
+					<div className="context-trend-main">
+						<div className="context-marker-strip">
+							{steps.map(step => (
+								<button
+									type="button"
+									key={step.id}
+									className={
+										timeline.steps[selected]?.id === step.id ? "context-marker selected" : "context-marker"
+									}
+									title={`${formatTimestamp(step.timestamp)} · ${step.deltaKind}`}
+									aria-label={`Step ${step.index}, ${step.promptTokens} prompt tokens`}
+									onClick={() => onSelect(offset + steps.indexOf(step))}
+								/>
+							))}
+						</div>
+						{mode === "delta" ? (
+							<DeltaList
+								steps={steps}
+								offset={offset}
+								selected={selected}
+								timeline={timeline}
+								onSelect={onSelect}
+							/>
+						) : (
+							<Chart
+								slots={steps.length}
+								tickLabel={index => `#${steps[index]?.index ?? ""}`}
+								series={series}
+								references={contextWindow ? [{ value: contextWindow, label: "window" }] : undefined}
+								onSelect={index => onSelect(offset + index)}
+								format={formatCompact}
+								tooltipExtra={index => (
+									<span>
+										{formatTimestamp(steps[index]!.timestamp)} · step #{steps[index]!.index}
+									</span>
+								)}
+								emptyLabel="Composition unavailable"
+							/>
 						)}
-						emptyLabel="Composition unavailable"
+						<ContextOverviewRibbon steps={timeline.steps} selected={selected} onSelect={onSelect} />
+					</div>
+					<ContextStepBrief
+						step={briefStep}
+						events={timeline.events}
+						onOpenBrowser={onOpenBrowser}
+						onOpenEvent={onOpenEvent}
 					/>
-				)}
+				</div>
 			</div>
 		</section>
 	);

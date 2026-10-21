@@ -1,8 +1,8 @@
-import { useMemo } from "react";
-import { formatCompact, formatPercent } from "../../data/formatters";
+import { useEffect, useRef } from "react";
+import { formatCompact } from "../../data/formatters";
 import { Badge, Card } from "../../ui";
 import type { ContextStep, ContextTimeline } from "../../types";
-import { categoryRows, categoryShare } from "./view-models";
+import { ContextCategoryRows } from "./ContextCategoryRows";
 
 export function CompositionTab({
 	timeline,
@@ -15,7 +15,15 @@ export function CompositionTab({
 }) {
 	const steps = timeline.steps;
 	const step = steps[selected] ?? steps.at(-1);
-	const rows = useMemo(() => categoryRows(step), [step]);
+	const selectedRef = useRef<HTMLButtonElement | null>(null);
+	useEffect(() => {
+		const element = selectedRef.current;
+		const strip = element?.parentElement;
+		if (!element || !strip) return;
+		const stripRect = strip.getBoundingClientRect();
+		const elementRect = element.getBoundingClientRect();
+		strip.scrollLeft += elementRect.left - stripRect.left - strip.clientWidth / 2 + elementRect.width / 2;
+	}, [selected]);
 	if (!step)
 		return (
 			<Card title="Composition">
@@ -32,6 +40,9 @@ export function CompositionTab({
 					{steps.map((candidate, index) => (
 						<button
 							type="button"
+							ref={element => {
+								if (index === selected) selectedRef.current = element;
+							}}
 							className={index === selected ? "context-step active" : "context-step"}
 							key={candidate.id}
 							onClick={() => onSelect(index)}
@@ -44,18 +55,7 @@ export function CompositionTab({
 				{step.composition === undefined ? (
 					<p className="context-notice">Composition unavailable for this legacy step.</p>
 				) : (
-					<div className="context-waffle">
-						{rows.map(row => (
-							<div className="context-waffle-row" key={row.key}>
-								<span>{row.label}</span>
-								<span className="context-waffle-bar">
-									<i style={{ width: `${Math.min(100, categoryShare(row.tokens, step) * 100)}%` }} />
-								</span>
-								<strong>{row.tokens === null ? "n/a" : formatCompact(row.tokens)}</strong>
-								<small>{row.tokens === null ? "" : formatPercent(categoryShare(row.tokens, step))}</small>
-							</div>
-						))}
-					</div>
+					<ContextCategoryRows composition={step.composition} promptTokens={step.promptTokens} />
 				)}
 				{step.compositionEstimated && <Badge>current estimate</Badge>}
 				{(step.unattributed ?? 0) < 0 && <Badge tone="warn">estimate overshoot</Badge>}
