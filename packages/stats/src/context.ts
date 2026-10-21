@@ -38,6 +38,8 @@ export async function getContextOverview(range: TimeRange): Promise<ContextOverv
 				SELECT *, substr(session_file, length($prefix) + 1) AS relative_file
 				FROM messages
 				WHERE timestamp >= $cutoff AND substr(session_file, 1, length($prefix)) = $prefix
+					AND instr($separator || relative_file || $separator, $separator || '..' || $separator) = 0
+					AND instr($separator || relative_file || $separator, $separator || '.' || $separator) = 0
 			), folders AS (
 				SELECT *, instr(relative_file, $separator) AS folder_end
 				FROM paths WHERE substr(relative_file, 1, 2) <> '..'

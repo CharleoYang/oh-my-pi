@@ -42,6 +42,25 @@ function sessionFile(name: string): string {
 }
 
 describe("context overview", () => {
+	it("excludes transcripts whose normalized path escapes the sessions root", async () => {
+		await initDb();
+		const now = Date.now();
+		const inside = sessionFile("inside");
+		const traversal = `${getSessionsDir()}${path.sep}project${path.sep}..${path.sep}..${path.sep}outside.jsonl`;
+		const dotPrefixed = `${getSessionsDir()}${path.sep}.${path.sep}outside.jsonl`;
+		insertMessageStats([
+			message(inside, "inside", now - HOUR_MS, 100),
+			message(traversal, "escape", now - HOUR_MS, 10000),
+			message(dotPrefixed, "dot", now - HOUR_MS, 20000),
+		]);
+
+		const overview = await getContextOverview("24h");
+		expect(overview.kpi.sessions).toBe(1);
+		expect(overview.kpi.requests).toBe(1);
+		expect(overview.kpi.totalTokens).toBe(160);
+		expect(overview.sessions.map(row => row.file)).toEqual([inside]);
+	});
+
 	it("uses range activity and folds child requests into their root", async () => {
 		await initDb();
 		const now = Date.now();
