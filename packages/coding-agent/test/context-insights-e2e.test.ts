@@ -65,14 +65,12 @@ const ENV_KEYS = [
 
 describe("context insights source-only cross-surface E2E", () => {
 	let temp: TempDir;
-	let oldAgentDir: string;
 	let installedBefore: { mtimeMs: number; hash: string } | null;
 	const oldEnv = new Map<string, string | undefined>();
 	let chromium: LaunchHeadlessResult | undefined;
 
 	beforeAll(async () => {
 		installedBefore = await installedFingerprint();
-		oldAgentDir = getAgentDir();
 		temp = TempDir.createSync("@pi-context-e2e-");
 		for (const key of ENV_KEYS) oldEnv.set(key, process.env[key]);
 		for (const key of ["XDG_DATA_HOME", "XDG_STATE_HOME", "XDG_CACHE_HOME", "PI_SESSION_FILE", "PI_SESSION_ID"])
