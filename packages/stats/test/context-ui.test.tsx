@@ -447,6 +447,19 @@ describe("Context page", () => {
 		expect(container.textContent).not.toContain("latency");
 	});
 
+	it("sums token usage and labels omitted steps", async () => {
+		const file = `/tmp/tokens-${++sequence}.jsonl`;
+		const container = await renderRoute(file, "24h", [], { ...timeline, file, omittedSteps: 3 });
+		expect(container.querySelector(".context-donut-center strong")?.textContent).toBe("80");
+		expect([...container.querySelectorAll(".context-donut-legend b")].map(element => element.textContent)).toEqual([
+			"40",
+			"10",
+			"20",
+			"10",
+		]);
+		expect(container.textContent).toContain("+3 steps omitted");
+	});
+
 
 	it("announces an explicit step selection without making polling live", async () => {
 		const container = await renderRoute("/tmp/detail.jsonl");
