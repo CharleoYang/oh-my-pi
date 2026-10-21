@@ -273,14 +273,22 @@
 	text-align: left;
 	cursor: pointer;
 }
-.context-delta-row:hover,
+.context-delta-row:hover {
+	background: var(--hover);
+}
 .context-delta-row.active {
-	background: var(--surface);
+	background: var(--selected);
 }
 .context-delta-track {
 	position: relative;
 	height: 8px;
-	background: linear-gradient(to right, transparent 49.5%, var(--border) 49.5%, var(--border) 50.5%, transparent 50.5%);
+	background: linear-gradient(
+		to right,
+		transparent 49.5%,
+		var(--line-3) 49.5%,
+		var(--line-3) 50.5%,
+		transparent 50.5%
+	);
 }
 .context-delta-fill {
 	position: absolute;
