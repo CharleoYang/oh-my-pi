@@ -48,7 +48,7 @@ const inflight = new Map<string, Inflight>();
 
 function bucketFor(key: string): CacheBucket {
 	if (key.startsWith('["trace",')) return traceBucket;
-	if (key.startsWith('["session-context",')) return contextBucket;
+	if (key.startsWith('["context-session",')) return contextBucket;
 	if (key.startsWith('["request",')) return requestBucket;
 	return defaultBucket;
 }

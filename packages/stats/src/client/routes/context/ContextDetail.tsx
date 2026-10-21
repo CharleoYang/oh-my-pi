@@ -31,7 +31,7 @@ export function ContextDetail({
 	const [rootFile, setRootFile] = useState(file);
 	const [displayFile, setDisplayFile] = useState(file);
 	const query = useQuery<ContextTimeline>(
-		["session-context", displayFile],
+		["context-session", displayFile],
 		({ signal }, previous) => getSessionContext(displayFile, signal, previous),
 		{ pollMs: 15000, enabled: active },
 	);
