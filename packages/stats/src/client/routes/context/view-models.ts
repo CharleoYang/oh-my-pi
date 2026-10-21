@@ -167,12 +167,22 @@ export function buildActivityCells(overview: ContextOverview, now = Date.now()):
 		for (let bucket = first; bucket <= last; bucket += bucketMs) {
 			const key = localDateKey(bucket);
 			ensure(key, bucket, bucket + bucketMs, 0, 0);
+			members.get(key)?.push(bucket);
 		}
 	} else {
 		for (let index = 0; index < slots; index++) {
 			const key = `slot-${index}`;
 			const start = oneHour ? overview.cutoff : overview.cutoff + index * bucketMs;
 			ensure(key, start, Math.min(now, start + (oneHour ? HOUR_MS : bucketMs)), 0, 0);
+		}
+		// Enumerate every epoch bucket, including absent zero buckets, so even an
+		// empty display cell has the real interval it covers.
+		const first = Math.floor(overview.cutoff / bucketMs) * bucketMs;
+		for (let bucket = first; bucket <= now; bucket += bucketMs) {
+			const index = oneHour
+				? 0
+				: Math.min(slots - 1, Math.max(0, Math.floor((bucket - overview.cutoff) / bucketMs)));
+			members.get(`slot-${index}`)?.push(bucket);
 		}
 	}
 
@@ -194,7 +204,6 @@ export function buildActivityCells(overview: ContextOverview, now = Date.now()):
 		cell.totalTokens += point.totalTokens;
 		cell.costTotal += point.costTotal;
 		cell.unpricedRequests += point.unpricedRequests;
-		members.get(key)?.push(point.bucket);
 	}
 
 	for (const cell of cells) {

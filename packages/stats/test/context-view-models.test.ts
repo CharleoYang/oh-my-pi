@@ -125,6 +125,32 @@ describe("context view models", () => {
 			expect(cells.reduce((sum, cell) => sum + cell.promptTokens, 0)).toBe(100);
 		});
 
+		it("does not make empty cells overlap a populated bucket's interval", () => {
+			const cutoff = 12.5 * 3_600_000;
+			const now = cutoff + 24 * 3_600_000;
+			const requestAt = cutoff + 2.25 * 3_600_000;
+			const bucket = Math.floor(requestAt / 3_600_000) * 3_600_000;
+			const overview = overviewFixture("24h", cutoff, 3_600_000, now);
+			overview.heatmap = [
+				{
+					bucket,
+					requests: 1,
+					promptTokens: 100,
+					outputTokens: 10,
+					totalTokens: 110,
+					costTotal: 0,
+					unpricedRequests: 0,
+				},
+			];
+			const cells = buildActivityCells(overview, now);
+			const containing = cells.filter(cell => requestAt >= cell.start && requestAt < cell.end);
+			expect(containing).toHaveLength(1);
+			expect(containing[0]?.requests).toBe(1);
+			expect(
+				cells.filter(cell => cell.requests === 0 && requestAt >= cell.start && requestAt < cell.end),
+			).toHaveLength(0);
+		});
+
 		it("builds 168 cells for 7d and seven chart bands", () => {
 			const cutoff = 12.5 * 3_600_000;
 			const now = cutoff + 7 * 24 * 3_600_000;
