@@ -5,6 +5,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { getSessionContext } from "../src/client/api";
 import { ContextRoute } from "../src/client/routes/ContextRoute";
 import { ContextActivityGrid } from "../src/client/routes/context/ContextActivityGrid";
+import { ContextFleetGraph } from "../src/client/routes/context/ContextFleetGraph";
 import { FilesTab } from "../src/client/routes/context/FilesTab";
 import { buildActivityCells } from "../src/client/routes/context/view-models";
 import type { ContextOverview, ContextTimeline } from "../src/client/types";
@@ -41,6 +42,11 @@ function setupDom(): HTMLElement {
 				disconnect() {}
 			},
 		],
+		["requestAnimationFrame", (callback: FrameRequestCallback) => {
+			callback(0);
+			return 1;
+		}],
+		["cancelAnimationFrame", () => {}],
 	] as const)
 		installGlobal(name, value);
 	const container = domWindow.document.getElementById("root");
@@ -517,6 +523,56 @@ describe("Context page", () => {
 	});
 
 
+
+	it("renders one connector for each visible fleet child and recomputes on lane scroll", async () => {
+		const container = setupDom();
+		const domWindow = globalThis.window as unknown as {
+			HTMLElement: { prototype: { getBoundingClientRect: () => DOMRect } };
+			Event: typeof Event;
+		};
+		const original = domWindow.HTMLElement.prototype.getBoundingClientRect;
+		let scrolled = 0;
+		const rect = (x: number, y: number, width: number, height: number) =>
+			({ x, y, width, height, top: y, left: x, right: x + width, bottom: y + height, toJSON: () => ({}) }) as DOMRect;
+		domWindow.HTMLElement.prototype.getBoundingClientRect = function (this: HTMLElement) {
+			if (this.classList.contains("context-fleet-canvas")) return rect(0, 0, 700, 420);
+			if (this.dataset.testid === "fleet-main") return rect(0, 160, 200, 100);
+			if (this.dataset.testid === "fleet-lane") return rect(228, 0, 472, 420);
+			const index = this.dataset.trackId === "child-a" ? 0 : this.dataset.trackId === "child-b" ? 1 : -1;
+			if (index >= 0) return rect(300, (index === 0 ? 10 : 310) - scrolled, 300, 80);
+			return original.call(this);
+		};
+		try {
+			const file = `/tmp/connectors-${++sequence}.jsonl`;
+			const detail: ContextTimeline = {
+				...timeline,
+				file,
+				agents: [
+					{ ...timeline.agents[0]!, trackId: "main", label: "Main", status: "main" },
+					{ ...timeline.agents[1]!, trackId: "child-a", label: "child-a" },
+					{ ...timeline.agents[1]!, trackId: "child-b", label: "child-b" },
+				],
+			};
+			await act(async () => {
+				root?.render(<ContextFleetGraph timeline={detail} onOpenAgent={() => {}} />);
+			});
+			const lane = container.querySelector('[data-testid="fleet-lane"]') as HTMLElement;
+			const paths = () =>
+				[...container.querySelectorAll("svg.context-fleet-edges path")].map(path =>
+					path.getAttribute("data-edge-for"),
+				);
+			expect(paths()).toEqual(["child-a", "child-b"]);
+			expect(container.querySelector("clipPath rect")?.getAttribute("x")).toBe("200");
+			scrolled = 200;
+			await act(async () => {
+				lane.dispatchEvent(new domWindow.Event("scroll", { bubbles: false }));
+			});
+			expect(paths()).toEqual(["child-b"]);
+		} finally {
+			domWindow.HTMLElement.prototype.getBoundingClientRect = original;
+		}
+	});
+
 	it("keeps every fleet child in the logical edge set and in the table fallback", async () => {
 		const file = `/tmp/fleet-${++sequence}.jsonl`;
 		const detail: ContextTimeline = {
@@ -632,13 +688,18 @@ describe("Context page", () => {
 		await act(async () => {
 			browser.click();
 		});
+		const firstStep = [...container.querySelectorAll("button")].find(button => button.textContent?.startsWith("#0"));
+		if (!firstStep) throw new Error("browser step missing");
+		await act(async () => {
+			firstStep.click();
+		});
 		const toTrend = [...container.querySelectorAll("button")].find(button => button.textContent === "Open in Trend");
 		if (!toTrend) throw new Error("Open in Trend missing");
 		await act(async () => {
 			toTrend.click();
 		});
 		expect(container.querySelector('[data-testid="context-tab-trend"]')?.getAttribute("aria-selected")).toBe("true");
-		expect(container.textContent).toContain("Step #1");
+		expect(container.textContent).toContain("Step #0");
 		const toBrowser = [...container.querySelectorAll("button")].find(
 			button => button.textContent === "Open in Browser",
 		);
@@ -647,7 +708,7 @@ describe("Context page", () => {
 			toBrowser.click();
 		});
 		expect(container.querySelector('[data-testid="context-tab-browser"]')?.getAttribute("aria-selected")).toBe("true");
-		expect(container.querySelector(".context-browser")?.textContent).toContain("Step #1");
+		expect(container.querySelector(".context-browser")?.textContent).toContain("Step #0");
 	});
 
 	it("renders system-part details in the Browser tab", async () => {

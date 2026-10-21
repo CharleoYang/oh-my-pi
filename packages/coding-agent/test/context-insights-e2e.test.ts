@@ -313,6 +313,7 @@ describe("context insights source-only cross-surface E2E", () => {
 			await page.waitForSelector(".context-session-card");
 			await page.click(".context-session-card");
 			await page.waitForSelector('[data-testid="context-detail-requests"]');
+			const detailUrl = page.url();
 			expect(await page.$eval('[data-testid="context-detail-requests"]', element => element.textContent)).toBe(
 				String(live.steps.length),
 			);
@@ -355,6 +356,36 @@ describe("context insights source-only cross-surface E2E", () => {
 			if (!toTrend) throw new Error("Browser Open in Trend missing");
 			await toTrend.click();
 			await page.waitForSelector('[data-testid="context-tab-trend"][aria-selected="true"]');
+			for (const action of ["click", "Enter", "Space"] as const) {
+				const controlPage = await chromium!.browser.newPage();
+				try {
+					await controlPage.goto(detailUrl, { waitUntil: "networkidle2" });
+					await controlPage.waitForSelector('[data-testid="context-detail-requests"]');
+					await controlPage.click('[data-testid="context-tab-files"]');
+					await controlPage.waitForSelector('[data-testid="context-tab-files"][aria-selected="true"]');
+					await controlPage.waitForSelector(".context-file-open");
+					await controlPage.evaluate(() => {
+						(window as unknown as { __hash: number }).__hash = 0;
+						window.addEventListener("hashchange", () => {
+							(window as unknown as { __hash: number }).__hash++;
+						});
+					});
+					const button = await controlPage.$(".context-file-open");
+					if (!button) throw new Error("open trace button missing");
+					if (action === "click") await button.click();
+					else {
+						await button.focus();
+						await controlPage.keyboard.press(action);
+					}
+					await controlPage.waitForFunction(() => location.hash.includes("/traces"));
+					await Bun.sleep(150);
+					expect(
+						await controlPage.evaluate(() => (window as unknown as { __hash: number }).__hash),
+					).toBe(1);
+				} finally {
+					await controlPage.close();
+				}
+			}
 			const screenshotPath = temp.join("context-insights.png");
 			await page.screenshot({ path: screenshotPath, fullPage: true });
 			const evidenceDir = process.env.CONTEXT_E2E_EVIDENCE_DIR;
