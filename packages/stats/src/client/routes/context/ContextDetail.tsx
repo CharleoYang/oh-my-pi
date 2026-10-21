@@ -172,7 +172,15 @@ export function ContextDetail({
 							onOpenEvent={openEvent}
 						/>
 					) : tab === "browser" ? (
-						<BrowserTab timeline={data} selected={currentStep} onSelect={selectStep} />
+						<BrowserTab
+							timeline={data}
+							selected={currentStep}
+							onSelect={selectStep}
+							onOpenTrend={index => {
+								selectStep(index);
+								setTab("trend");
+							}}
+						/>
 					) : tab === "events" ? (
 						<EventsTab
 							timeline={data}
