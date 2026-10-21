@@ -39,6 +39,24 @@ export interface ContextSessionRow {
 	promptTokens: number;
 	peakPromptTokens: number;
 	avgPromptTokens: number;
+	inputTokens: number;
+	outputTokens: number;
+	cacheReadTokens: number;
+	cacheWriteTokens: number;
+	costTotal: number;
+	unpricedRequests: number;
+	/** 12 coarse prompt-token buckets; sums to promptTokens. */
+	sparkline: number[];
+}
+
+/** One model aggregate over the same range/eligibility as the overview KPI. */
+export interface ContextModelRow {
+	model: string;
+	requests: number;
+	promptTokens: number;
+	totalTokens: number;
+	costTotal: number;
+	unpricedRequests: number;
 }
 
 /** Range-scoped payload for GET /api/context/overview. */
@@ -53,8 +71,25 @@ export interface ContextOverview {
 		avgPromptTokens: number;
 		peakPromptTokens: number;
 		totalTokens: number;
+		promptTokens: number;
+		inputTokens: number;
+		outputTokens: number;
+		cacheReadTokens: number;
+		cacheWriteTokens: number;
+		cacheRate: number;
+		costTotal: number;
+		unpricedRequests: number;
 	};
-	heatmap: Array<{ bucket: number; requests: number; promptTokens: number }>;
+	heatmap: Array<{
+		bucket: number;
+		requests: number;
+		promptTokens: number;
+		outputTokens: number;
+		totalTokens: number;
+		costTotal: number;
+		unpricedRequests: number;
+	}>;
+	models: ContextModelRow[];
 	sessions: ContextSessionRow[];
 	/** Range-active roots beyond the 200-row response cap. */
 	omittedSessions: number;

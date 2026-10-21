@@ -13,13 +13,20 @@ installStatsTestIsolation("@pi-stats-context-overview-");
 const HOUR_MS = 60 * 60 * 1000;
 const DAY_MS = 24 * HOUR_MS;
 
-function message(file: string, entryId: string, timestamp: number, input = 100, model = "model-a"): MessageStatsInput {
+function message(
+	file: string,
+	entryId: string,
+	timestamp: number,
+	input = 100,
+	model = "model-a",
+	provider = "test-provider",
+): MessageStatsInput {
 	return {
 		sessionFile: file,
 		entryId,
 		folder: "/work/project",
 		model,
-		provider: "test-provider",
+		provider,
 		api: "openai-responses",
 		timestamp,
 		duration: 1000,
@@ -111,6 +118,14 @@ describe("context overview", () => {
 			avgPromptTokens: 250,
 			peakPromptTokens: 350,
 			totalTokens: 780,
+			promptTokens: 750,
+			inputTokens: 600,
+			outputTokens: 30,
+			cacheReadTokens: 60,
+			cacheWriteTokens: 90,
+			cacheRate: 60 / 660,
+			costTotal: 0,
+			unpricedRequests: 0,
 		});
 		expect(overview.sessions).toEqual([
 			{
@@ -125,6 +140,13 @@ describe("context overview", () => {
 				promptTokens: 400,
 				peakPromptTokens: 250,
 				avgPromptTokens: 200,
+				inputTokens: 300,
+				outputTokens: 20,
+				cacheReadTokens: 40,
+				cacheWriteTokens: 60,
+				costTotal: 0,
+				unpricedRequests: 0,
+				sparkline: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 150, 250],
 			},
 			{
 				file: second,
@@ -138,12 +160,47 @@ describe("context overview", () => {
 				promptTokens: 350,
 				peakPromptTokens: 350,
 				avgPromptTokens: 350,
+				inputTokens: 300,
+				outputTokens: 10,
+				cacheReadTokens: 20,
+				cacheWriteTokens: 30,
+				costTotal: 0,
+				unpricedRequests: 0,
+				sparkline: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 350, 0],
 			},
 		]);
 		expect(overview.heatmap).toEqual([
-			{ bucket: Math.floor((now - 3 * HOUR_MS) / HOUR_MS) * HOUR_MS, requests: 1, promptTokens: 350 },
-			{ bucket: Math.floor((now - 2 * HOUR_MS) / HOUR_MS) * HOUR_MS, requests: 1, promptTokens: 150 },
-			{ bucket: Math.floor((now - HOUR_MS) / HOUR_MS) * HOUR_MS, requests: 1, promptTokens: 250 },
+			{
+				bucket: Math.floor((now - 3 * HOUR_MS) / HOUR_MS) * HOUR_MS,
+				requests: 1,
+				promptTokens: 350,
+				outputTokens: 10,
+				totalTokens: 360,
+				costTotal: 0,
+				unpricedRequests: 0,
+			},
+			{
+				bucket: Math.floor((now - 2 * HOUR_MS) / HOUR_MS) * HOUR_MS,
+				requests: 1,
+				promptTokens: 150,
+				outputTokens: 10,
+				totalTokens: 160,
+				costTotal: 0,
+				unpricedRequests: 0,
+			},
+			{
+				bucket: Math.floor((now - HOUR_MS) / HOUR_MS) * HOUR_MS,
+				requests: 1,
+				promptTokens: 250,
+				outputTokens: 10,
+				totalTokens: 260,
+				costTotal: 0,
+				unpricedRequests: 0,
+			},
+		]);
+		expect(overview.models).toEqual([
+			{ model: "model-a", requests: 2, promptTokens: 500, totalTokens: 520, costTotal: 0, unpricedRequests: 0 },
+			{ model: "model-b", requests: 1, promptTokens: 250, totalTokens: 260, costTotal: 0, unpricedRequests: 0 },
 		]);
 		expect(overview.omittedSessions).toBe(0);
 		expect(overview.omittedRequests).toBe(0);
@@ -177,8 +234,65 @@ describe("context overview", () => {
 			avgPromptTokens: 31053 / 203,
 			peakPromptTokens: 450,
 			totalTokens: 33083,
+			promptTokens: 31053,
+			inputTokens: 20903,
+			outputTokens: 2030,
+			cacheReadTokens: 4060,
+			cacheWriteTokens: 6090,
+			cacheRate: 4060 / (20903 + 4060),
+			costTotal: 0,
+			unpricedRequests: 0,
 		});
 		expectConservation(overview);
+	});
+
+	it("conserves prompt tokens in the sparkline when the cutoff starts mid-bucket", async () => {
+		await initDb();
+		const now = Date.UTC(2026, 0, 1, 12, 30, 0);
+		const clock = spyOn(Date, "now").mockReturnValue(now);
+		try {
+			insertMessageStats([message(sessionFile("unaligned"), "unaligned", now - DAY_MS + 15 * 60_000, 100)]);
+			const overview = await getContextOverview("24h");
+			expect(overview.kpi.promptTokens).toBe(150);
+			expect(overview.sessions[0]?.sparkline).toEqual([150, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+			expect(overview.sessions[0]?.sparkline.reduce((sum, value) => sum + value, 0)).toBe(150);
+		} finally {
+			clock.mockRestore();
+		}
+	});
+
+	it("carries unpriced requests into KPI, heatmap and session rows", async () => {
+		await initDb();
+		const now = Date.now();
+		insertMessageStats([message(sessionFile("unpriced"), "unpriced", now - HOUR_MS, 100, "model-a", "xai-oauth")]);
+		const overview = await getContextOverview("24h");
+		expect(overview.kpi.unpricedRequests).toBe(1);
+		expect(overview.heatmap[0]?.unpricedRequests).toBe(1);
+		expect(overview.sessions[0]?.unpricedRequests).toBe(1);
+		expect(overview.sessions[0]?.costTotal).toBe(0);
+	});
+
+	it("keeps model totals on the same eligible roots as the KPI", async () => {
+		await initDb();
+		const now = Date.now();
+		const inside = sessionFile("model-eligible");
+		const traversal = `${getSessionsDir()}${path.sep}project${path.sep}..${path.sep}..${path.sep}outside.jsonl`;
+		insertMessageStats([
+			message(inside, "inside-model", now - HOUR_MS, 100, "eligible-model"),
+			message(traversal, "escape-model", now - HOUR_MS, 10000, "escape-model"),
+		]);
+		const overview = await getContextOverview("24h");
+		expect(overview.kpi.requests).toBe(1);
+		expect(overview.models).toEqual([
+			{
+				model: "eligible-model",
+				requests: 1,
+				promptTokens: 150,
+				totalTokens: 160,
+				costTotal: 0,
+				unpricedRequests: 0,
+			},
+		]);
 	});
 
 	it("returns zero KPIs and empty arrays when no requests are in range", async () => {
@@ -191,9 +305,18 @@ describe("context overview", () => {
 			avgPromptTokens: 0,
 			peakPromptTokens: 0,
 			totalTokens: 0,
+			promptTokens: 0,
+			inputTokens: 0,
+			outputTokens: 0,
+			cacheReadTokens: 0,
+			cacheWriteTokens: 0,
+			cacheRate: 0,
+			costTotal: 0,
+			unpricedRequests: 0,
 		});
 		expect(overview.sessions).toEqual([]);
 		expect(overview.heatmap).toEqual([]);
+		expect(overview.models).toEqual([]);
 		expect(overview.omittedSessions).toBe(0);
 		expect(overview.omittedRequests).toBe(0);
 		expect(overview.omittedPromptTokens).toBe(0);
