@@ -318,7 +318,9 @@ export function estimateContextToolSchemaTokensByTool(
 	) {
 		return cached.items;
 	}
-	const items = tools.map(tool => ({ name: tool.name, tokens: tokenizer.countTokens(toolSchemaFragments(tool)) }));
+	const items = tools
+		.map(tool => ({ name: tool.name, tokens: tokenizer.countTokens(toolSchemaFragments(tool)) }))
+		.sort((a, b) => b.tokens - a.tokens || a.name.localeCompare(b.name));
 	cache.byTokenizer.set(tokenizer, { revision, sourceRevision, schemaPolicy, items });
 	return items;
 }
@@ -328,10 +330,12 @@ export function estimateContextSkillsTokensByName(
 	skills: readonly ContextSkill[],
 	tokenizer: Tokenizer,
 ): ContextNamedTokens[] {
-	return skills.map(skill => ({
-		name: skill.name,
-		tokens: tokenizer.countTokens([skill.name, skill.description ?? ""]),
-	}));
+	return skills
+		.map(skill => ({
+			name: skill.name,
+			tokens: tokenizer.countTokens([skill.name, skill.description ?? ""]),
+		}))
+		.sort((a, b) => b.tokens - a.tokens || a.name.localeCompare(b.name));
 }
 
 /**

@@ -40,11 +40,17 @@ function nonNegative(value: unknown): number {
 	return typeof value === "number" && Number.isFinite(value) ? Math.max(0, Math.floor(value)) : 0;
 }
 
-/** Largest-remainder allocation of `total` across the supplied weights. */
+/** Merge duplicate names, then allocate `total` with a deterministic largest remainder. */
 function normalizeNamedTokens(items: readonly ContextNamedTokens[], total: number): ContextNamedTokens[] {
-	const cleaned = items
-		.filter(item => typeof item.name === "string" && item.name.length > 0 && nonNegative(item.tokens) > 0)
-		.map(item => ({ name: item.name, tokens: nonNegative(item.tokens) }))
+	const byName = new Map<string, number>();
+	for (const item of items) {
+		if (typeof item.name !== "string" || item.name.length === 0) continue;
+		const tokens = nonNegative(item.tokens);
+		if (tokens <= 0) continue;
+		byName.set(item.name, (byName.get(item.name) ?? 0) + tokens);
+	}
+	const cleaned = [...byName]
+		.map(([name, tokens]) => ({ name, tokens }))
 		.sort((a, b) => b.tokens - a.tokens || a.name.localeCompare(b.name));
 	if (total <= 0 || cleaned.length === 0) return [];
 	const weight = cleaned.reduce((sum, item) => sum + item.tokens, 0);
@@ -54,14 +60,15 @@ function normalizeNamedTokens(items: readonly ContextNamedTokens[], total: numbe
 	const fractions = cleaned
 		.map((item, index) => ({
 			index,
+			name: item.name,
 			fraction: (item.tokens * total) / weight - Math.floor((item.tokens * total) / weight),
 		}))
-		.sort((a, b) => b.fraction - a.fraction || a.index - b.index);
+		.sort((a, b) => b.fraction - a.fraction || a.name.localeCompare(b.name));
 	for (let index = 0; remainder > 0 && fractions.length > 0; index = (index + 1) % fractions.length) {
 		allocated[fractions[index]!.index]!.tokens++;
 		remainder--;
 	}
-	return allocated;
+	return allocated.sort((a, b) => b.tokens - a.tokens || a.name.localeCompare(b.name));
 }
 
 function normalizeParts(parts: readonly number[], total: number): number[] {
@@ -109,7 +116,9 @@ export function captureContextSnapshotDetails(input: CaptureContextSnapshotDetai
 		toolSchemas = toolSchemas.slice(0, maxTools);
 	}
 
-	const rawSkills = estimateContextSkillsTokensByName(input.skills, input.tokenizer);
+	const hasReadTool = input.tools.some(tool => tool.name === "read");
+	const visibleSkills = hasReadTool ? input.skills.filter(skill => skill.hide !== true) : [];
+	const rawSkills = estimateContextSkillsTokensByName(visibleSkills, input.tokenizer);
 	let skills = normalizeNamedTokens(rawSkills, categories.skills);
 	let omittedSkills = 0;
 	if (skills.length > maxSkills) {
@@ -120,26 +129,23 @@ export function captureContextSnapshotDetails(input: CaptureContextSnapshotDetai
 	const rawParts = (input.systemPrompt ?? []).map(part =>
 		typeof part === "string" ? input.tokenizer.countTokens(part) : 0,
 	);
-	let systemPromptParts: number[] | undefined;
+	let systemPromptParts: number[] = [];
 	let systemPromptPartsOmitted = 0;
 	if (rawParts.length > 0) {
 		rawParts[0] = Math.max(0, rawParts[0]! - categories.skills);
-		if (rawParts.length > maxParts) {
-			const kept = rawParts.slice(0, maxParts - 1);
-			const keptPrompt = normalizeParts([kept[0] ?? 0], categories.systemPrompt);
-			const keptContext = normalizeParts(kept.slice(1), categories.systemContext);
-			systemPromptParts = [...keptPrompt, ...keptContext];
-			const consumed = systemPromptParts.reduce((sum, value) => sum + value, 0);
-			systemPromptParts.push(Math.max(0, categories.systemPrompt + categories.systemContext - consumed));
-			systemPromptPartsOmitted = rawParts.length - systemPromptParts.length;
+		const promptPart = normalizeParts([rawParts[0] ?? 0], categories.systemPrompt)[0] ?? 0;
+		const allContext = normalizeParts(rawParts.slice(1), categories.systemContext);
+		if (allContext.length > maxParts - 1) {
+			const kept = allContext.slice(0, maxParts - 2);
+			const merged = allContext.slice(maxParts - 2).reduce((sum, value) => sum + value, 0);
+			systemPromptParts = [promptPart, ...kept, merged];
 		} else {
-			const promptPart = normalizeParts([rawParts[0] ?? 0], categories.systemPrompt);
-			const contextParts = normalizeParts(rawParts.slice(1), categories.systemContext);
-			systemPromptParts = [...promptPart, ...contextParts];
-			if (systemPromptParts.length === 1 && categories.systemContext > 0) {
-				systemPromptParts.push(categories.systemContext);
-			}
+			systemPromptParts = [promptPart, ...allContext];
 		}
+		if (systemPromptParts.length === 1 && categories.systemContext > 0) {
+			systemPromptParts.push(categories.systemContext);
+		}
+		systemPromptPartsOmitted = Math.max(0, rawParts.length - systemPromptParts.length);
 	}
 
 	const pendingMessageTokens = input.tokenizer.countMessages(input.pendingMessages);
@@ -147,11 +153,11 @@ export function captureContextSnapshotDetails(input: CaptureContextSnapshotDetai
 	return {
 		contextWindow: nonNegative(input.contextWindow),
 		categories,
-		...(toolSchemas.length > 0 ? { toolSchemas } : {}),
+		toolSchemas,
 		...(omittedToolSchemas > 0 ? { omittedToolSchemas } : {}),
-		...(skills.length > 0 ? { skills } : {}),
+		skills,
 		...(omittedSkills > 0 ? { omittedSkills } : {}),
-		...(systemPromptParts ? { systemPromptParts } : {}),
+		systemPromptParts,
 		...(systemPromptPartsOmitted > 0 ? { systemPromptPartsOmitted } : {}),
 		messageCount: nonNegative(input.messageCount),
 		pendingMessageTokens: nonNegative(pendingMessageTokens),
@@ -161,7 +167,9 @@ export function captureContextSnapshotDetails(input: CaptureContextSnapshotDetai
 const READ_SELECTOR = /:(?:raw|conflicts|img|[\d.,+-]+)$/i;
 
 function stripReadSelector(value: string): string {
-	return value.replace(READ_SELECTOR, "");
+	let result = value;
+	while (READ_SELECTOR.test(result)) result = result.replace(READ_SELECTOR, "");
+	return result;
 }
 
 /** Resolve a file-tool path against the session workspace. */

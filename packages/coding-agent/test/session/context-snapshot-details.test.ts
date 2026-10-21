@@ -1,7 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import type { AgentMessage, Tokenizer } from "@oh-my-pi/pi-agent-core";
 import type { ContextCategoryTokens } from "@oh-my-pi/pi-ai";
-import { captureContextSnapshotDetails } from "../../src/session/context-insights";
+import type { AgentSession } from "../../src/session/agent-session";
+import { captureContextSnapshotDetails, createSessionPathResolver } from "../../src/session/context-insights";
 import { SessionStatsTracker, type SessionStatsTrackerHost } from "../../src/session/session-stats";
 import type { ContextUsageBreakdown } from "../../src/session/agent-session-types";
 
@@ -91,7 +92,7 @@ describe("captureContextSnapshotDetails", () => {
 	test("merges parts beyond the cap and reports the extra count", () => {
 		const parts = Array.from({ length: 21 }, (_, index) => `part-${index}`);
 		const details = captureContextSnapshotDetails({
-			breakdown,
+			breakdown: { ...breakdown, systemContextTokens: 20, messagesTokens: 30 },
 			contextWindow: 1000,
 			systemPrompt: parts,
 			tools: [],
@@ -103,9 +104,9 @@ describe("captureContextSnapshotDetails", () => {
 			pendingMessages: [],
 			limits: { maxToolSchemas: 200, maxSkills: 200, maxSystemParts: 20 },
 		});
-		expect(details.systemPromptParts).toHaveLength(20);
+		expect(details.systemPromptParts).toEqual([20, ...Array.from({ length: 18 }, () => 1), 2]);
 		expect(details.systemPromptPartsOmitted).toBe(1);
-		expect((details.systemPromptParts ?? []).reduce((sum, value) => sum + value, 0)).toBe(30);
+		expect((details.systemPromptParts ?? []).reduce((sum, value) => sum + value, 0)).toBe(40);
 	});
 
 	test("does not invent per-entry rows when the tokenizer reports zero weights", () => {
@@ -122,9 +123,79 @@ describe("captureContextSnapshotDetails", () => {
 			pendingMessages: [],
 		});
 		expect(details.categories.systemTools).toBe(30);
-		expect(details.toolSchemas).toBeUndefined();
-		expect(details.skills).toBeUndefined();
-		expect(details.systemPromptParts?.[0]).toBe(20);
+		expect(details.toolSchemas).toEqual([]);
+		expect(details.skills).toEqual([]);
+		expect(details.systemPromptParts).toEqual([20, 10]);
+	});
+
+	test("merges duplicate tool names before allocating or capping", () => {
+		const details = captureContextSnapshotDetails({
+			breakdown,
+			contextWindow: 1000,
+			systemPrompt: ["prompt"],
+			tools: [
+				{ name: "read", description: "same", parameters: {} },
+				{ name: "read", description: "same", parameters: {} },
+			],
+			skills: [],
+			model: undefined,
+			tokenizer: lengthTokenizer,
+			sourceRevision: 4,
+			messageCount: 0,
+			pendingMessages: [],
+			limits: { maxToolSchemas: 1, maxSkills: 200, maxSystemParts: 20 },
+		});
+		expect(details.toolSchemas).toEqual([{ name: "read", tokens: 30 }]);
+		expect(details.omittedToolSchemas).toBeUndefined();
+	});
+
+	test("excludes hidden skills and allocates deterministic name-order ties", () => {
+		const details = captureContextSnapshotDetails({
+			breakdown: { ...breakdown, skillsTokens: 2 },
+			contextWindow: 1000,
+			systemPrompt: ["prompt"],
+			tools: [{ name: "read", description: "", parameters: {} }],
+			skills: [
+				{ name: "a", description: "" },
+				{ name: "b", description: "xx" },
+				{ name: "hidden", description: "longer", hide: true },
+			],
+			model: undefined,
+			tokenizer: lengthTokenizer,
+			sourceRevision: 4,
+			messageCount: 0,
+			pendingMessages: [],
+		});
+		expect(details.skills).toEqual([
+			{ name: "a", tokens: 1 },
+			{ name: "b", tokens: 1 },
+		]);
+	});
+
+	test("strips a full compound read selector from resolved paths", () => {
+		const resolver = createSessionPathResolver({
+			sessionManager: { getCwd: () => "/work", getHeader: () => ({ additionalDirectories: [] }) },
+		} as unknown as AgentSession);
+		expect(resolver("a.ts:2-4:raw")).toBe("/work/a.ts");
+		expect(resolver("a.ts:raw:2-4")).toBe("/work/a.ts");
+	});
+
+	test("returns empty detail arrays when the prompt is empty", () => {
+		const details = captureContextSnapshotDetails({
+			breakdown,
+			contextWindow: 1000,
+			systemPrompt: [],
+			tools: [],
+			skills: [],
+			model: undefined,
+			tokenizer: lengthTokenizer,
+			sourceRevision: 4,
+			messageCount: 0,
+			pendingMessages: [],
+		});
+		expect(details.systemPromptParts).toEqual([]);
+		expect(details.toolSchemas).toEqual([]);
+		expect(details.skills).toEqual([]);
 	});
 });
 
