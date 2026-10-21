@@ -105,6 +105,35 @@ describe("native composer facts", () => {
 		}
 	});
 
+	it("keeps a linked worktree path fact so the worktree name survives a TSP pane header", () => {
+		setNativeRendering(true);
+		const originalProjectDir = getProjectDir();
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "omp-composer-worktree-"));
+		try {
+			const primary = path.join(root, "primary");
+			const worktree = path.join(root, "wt");
+			fs.mkdirSync(path.join(primary, ".git", "worktrees", "wt"), { recursive: true });
+			fs.writeFileSync(path.join(primary, ".git", "HEAD"), "ref: refs/heads/main\n");
+			fs.writeFileSync(path.join(primary, ".git", "config"), "[core]\n\trepositoryformatversion = 0\n\tbare = false\n");
+			fs.writeFileSync(path.join(primary, ".git", "worktrees", "wt", "HEAD"), "ref: refs/heads/feature\n");
+			fs.writeFileSync(path.join(primary, ".git", "worktrees", "wt", "commondir"), "../..\n");
+			fs.mkdirSync(worktree, { recursive: true });
+			fs.writeFileSync(path.join(worktree, ".git"), `gitdir: ${path.join(primary, ".git", "worktrees", "wt")}\n`);
+			setProjectDir(worktree);
+
+			const segs = facts(
+				statusLine({ preset: "custom", leftSegments: ["path", "git"], rightSegments: [] }, true),
+			);
+			expect(segs.map(seg => seg.key)).toEqual(["path", "git"]);
+			expect(segs[0]!.props).toMatchObject({ icon: "worktree" });
+			expect(segs[0]!.props.spans?.map(span => span.t).join("")).toBe("primary/wt");
+			expect(segs[1]!.props.spans?.[0]?.t).toBe("feature");
+		} finally {
+			setProjectDir(originalProjectDir);
+			removeSyncWithRetries(root);
+		}
+	});
+
 	it("spaces the git counts apart from the branch and each other", () => {
 		const text = (branch: string | null, showBranch = true) =>
 			describeSegment("git", {

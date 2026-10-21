@@ -3653,12 +3653,15 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
 	#buildComposerFacts(effectiveSettings: EffectiveStatusLineSettings, nowMs: number): ComposerFacts {
 		const { leftSegments, rightSegments } = effectiveSettings;
 		const segments = [...leftSegments, ...rightSegments];
-		// Tern's pane header shows the path from the pane's cwd; the branch sits by the model chip.
+		// Tern's pane header shows the ordinary path from the pane's cwd; the branch
+		// sits by the model chip. A linked worktree still needs its path resolved so
+		// the worktree fact can survive when the pane header does not show it.
+		const includePath = hasPathSegment(leftSegments) || hasPathSegment(rightSegments);
 		const gitEnabled = this.#gitEnabled();
 		const ctx = this.#buildSegmentContext(
 			0,
 			effectiveSettings.segmentOptions,
-			false,
+			includePath,
 			gitEnabled && hasGitSegment(segments),
 			gitEnabled && hasPrSegment(segments),
 			nowMs,
@@ -3671,9 +3674,14 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
 
 		const dim = this.#focusedAgentId !== undefined;
 		const facts: NativeNode[] = [];
+		// A TSP pane header owns the ordinary path. A linked worktree is different:
+		// its project/worktree identity is the only place the worktree name is shown,
+		// and a detached worktree otherwise renders as just "detached" in the git
+		// fact. Keep that one path fact in the composer so the worktree survives.
+		const keepWorktreePath = ctx.worktree !== null;
 		const collect = (side: "left" | "right", ids: readonly StatusLineSegmentId[]): void => {
 			ids.forEach((id, index) => {
-				if (COMPOSER_HOMED_SEGMENTS[id]) return;
+				if (COMPOSER_HOMED_SEGMENTS[id] && !(id === "path" && keepWorktreePath)) return;
 				const view = describeSegment(id, ctx);
 				if (!view) return;
 				const props: TspProps<"seg"> = {
