@@ -86,10 +86,13 @@ export function ContextDetail({
 			{timeline && (
 				<div className="context-detail-header">
 					<span>
-						<strong>{formatInteger(timeline.steps.length + timeline.omittedSteps)}</strong> requests
+						<strong data-testid="context-detail-requests">
+							{formatInteger(timeline.steps.length + timeline.omittedSteps)}
+						</strong>{" "}
+						requests
 					</span>
 					<span>
-						<strong>{formatCompact(timeline.peakTokens)}</strong> peak prompt
+						<strong data-testid="context-detail-peak">{formatCompact(timeline.peakTokens)}</strong> peak prompt
 					</span>
 					<span>
 						<strong>{timeline.events.filter(event => event.kind === "compact").length}</strong> compactions

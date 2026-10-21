@@ -135,6 +135,10 @@ Then use `isKeyRelease()` / `isKeyRepeat()` if needed.
 
 The coding-agent integration also mounts built-in full-screen surfaces outside `ctx.ui.custom(...)`. [Agent Hub](./agent-hub.md) is the live roster and control surface for subagents. Its file-backed transcript viewer borrows the alternate screen while it is open, then restores the Hub beneath it on close.
 
+Interactive command reports (including `/context`) focus the report host instead of the editor. ANSI terminals show a full-screen report page even for short content; native terminals use a focused sheet. The host consumes close and scroll keys first, then forwards unhandled keys to `body.handleInput`; non-close native events are forwarded to `body.handleNativeEvent`. Closing restores the prior editor focus and transcript without leaking report content into scrollback. Native Context tabs handle select/activate; the native protocol has no hover event.
+
+`ContextInsightsView` renders the active Overview/Trend/Events/Files page in full at the supplied width. It has no viewport height or private scrolling surface: the report host owns scrolling. Tab/left-right and `1`–`4` change pages, Trend's `d` toggles deltas, and `r` refreshes history without changing the active page. Reports display bounded counts, names and token estimates, not historical message bodies.
+
 ## Mount points and return contracts
 
 ## 1) Extension UI (`ExtensionUIContext`)

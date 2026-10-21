@@ -290,6 +290,12 @@ TUI and ACP/RPC dispatch the shared built-in registry before `session.prompt(...
   - discovered user/project commands (including the native OMP provider): warning + fallback key/value parse
 - Extension/custom command handler exceptions are caught and reported via extension error channel (or logger fallback for custom commands without extension runner), and treated as handled (no unintended fallback execution).
 
+## Built-in command note: `/context`
+
+In the interactive TUI, `/context` opens a focused report with four pages: **Overview**, **Trend**, **Events** and **Files**. Overview shows the current estimate; the remaining pages fold the active journal branch, so history still works without a selected model. Historical composition missing from old snapshots is unavailable, never inferred from today's configuration. Non-TUI callers retain the existing text-report behavior.
+
+The report host owns Esc (close) and scrolling. It forwards Tab / left-right (cycle pages), `1`–`4` (jump), `d` (toggle deltas on Trend only) and `r` (refresh history while preserving the page) to the interactive body. Refresh reads the current in-memory branch; opening the report does not send a model request. TUI history is bounded to 200 steps, 100 events and 50 files, with no per-step Browser details; use `omp stats` for Composition/Browser/Fleet drill-down.
+
 ## 10) Built-in command note: `/pause`
 
 `/pause` is available only in the interactive TUI. It engages a process-global gate for the main agent, in-process subagents, and the advisor. Each agent parks at its next safe boundary: in-flight calls finish, nothing is aborted, and no new work starts until the gate is released.
